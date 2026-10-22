@@ -38,6 +38,12 @@ class TaskCompleteServiceTest {
 
     @Test
     void shouldAccumulateTodayAndCompleteAcrossDays() {
+        // Step3: 进入完成状态后会结算奖励；此测试需提供事务内的奖励规则。
+        jdbcTemplate.update("""
+                INSERT INTO reward_config (type, coin, exp, water, enabled)
+                VALUES ('TASK_COMPLETE', 10, 20, 2, TRUE)
+                ON DUPLICATE KEY UPDATE coin=10, exp=20, water=2, enabled=TRUE
+                """);
         Task task = newTask(100);
         TaskCompleteResponse first = taskService.complete(task.getUserId(), task.getTaskId(), request(30));
         assertEquals(30L, first.getTotalActualCount());

@@ -15,4 +15,6 @@ public class TaskCompleteResponse {
     private Integer targetCount;
     private Integer remainingCount;
     private TaskStatus status;
+    // 未完成时为 null；首次达到目标时返回本次奖励与结算后余额。
+    private TaskRewardResponse reward;
 }

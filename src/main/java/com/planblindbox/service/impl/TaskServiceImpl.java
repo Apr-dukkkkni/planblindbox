@@ -2,6 +2,7 @@ package com.planblindbox.service.impl;
 
 import com.planblindbox.dto.request.TaskCompleteRequest;
 import com.planblindbox.dto.response.TaskCompleteResponse;
+import com.planblindbox.dto.response.TaskRewardResponse;
 import com.planblindbox.dto.request.TaskCreateRequest;
 import com.planblindbox.dto.request.TaskUpdateRequest;
 import com.planblindbox.dto.response.TaskResponse;
@@ -12,6 +13,7 @@ import com.planblindbox.enums.TaskStatus;
 import com.planblindbox.mapper.TaskMapper;
 import com.planblindbox.mapper.TaskRecordMapper;
 import com.planblindbox.service.TaskService;
+import com.planblindbox.service.RewardService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,7 @@ public class TaskServiceImpl implements TaskService {
 
     private final TaskMapper taskMapper;
     private final TaskRecordMapper taskRecordMapper;
+    private final RewardService rewardService;
 
 
     @Override
@@ -187,7 +190,7 @@ public class TaskServiceImpl implements TaskService {
 
     /**
      * 追加本次执行数量；同一 Task 的所有完成请求按行锁顺序串行执行。
-     * 本阶段只完成进度与状态事务；奖励将在下一阶段接到同一事务内。
+     * 达到目标后调用 RewardService，奖励结算与任务进度处于同一个事务。
      */
     @Override
     @Transactional
@@ -250,6 +253,12 @@ public class TaskServiceImpl implements TaskService {
             throw new IllegalStateException("更新任务状态失败");
         }
 
+        // 仅在首次达到目标时触发一次结算；任务行锁 + 已完成状态校验阻止重复发奖。
+        // 任何奖励 SQL 出错，都会回滚 TaskRecord、Task 状态及已写入的资产数据。
+        TaskRewardResponse reward = completed
+                ? rewardService.rewardTaskCompletion(userId, taskId)
+                : null;
+
         TaskCompleteResponse response = new TaskCompleteResponse();
         response.setTaskId(taskId);
         response.setRecordDate(today);
@@ -259,6 +268,7 @@ public class TaskServiceImpl implements TaskService {
         response.setTargetCount(task.getTargetCount());
         response.setRemainingCount((int) (task.getTargetCount() - totalAfter));
         response.setStatus(status);
+        response.setReward(reward);
         return response;
     }
 
