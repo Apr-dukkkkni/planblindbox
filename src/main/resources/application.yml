@@ -16,8 +16,7 @@ server:
   port: 8080
 
 
-  mybatis:
-    mapper-locations: classpath:mapper/*.xml
-
-    configuration:
-      map-underscore-to-camel-case: true  #处理下划线 → 驼峰映射
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+     map-underscore-to-camel-case: true  #处理下划线 → 驼峰映射
