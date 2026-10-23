@@ -1,5 +1,6 @@
 package com.planblindbox.service;
 
+import com.planblindbox.dto.response.HabitRewardResponse;
 import com.planblindbox.dto.response.TaskRewardResponse;
 import com.planblindbox.entity.AssetRecord;
 import com.planblindbox.entity.RewardConfig;
@@ -12,14 +13,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * 奖励结算只允许在外部事务内调用。
- * TaskServiceImpl.complete 已持有 task FOR UPDATE 行锁，保证同一任务不会重复结算。
- */
+/** 两种奖励都加入调用方事务，不单独提交资产。 */
 @Service
 @RequiredArgsConstructor
 public class RewardService {
     public static final String TASK_COMPLETE = "TASK_COMPLETE";
+    public static final String HABIT_CHECK_IN = "HABIT_CHECK_IN";
 
     private final RewardConfigMapper rewardConfigMapper;
     private final UserAssetMapper userAssetMapper;
@@ -27,73 +26,82 @@ public class RewardService {
 
     @Transactional(propagation = Propagation.MANDATORY)
     public TaskRewardResponse rewardTaskCompletion(Long userId, Long taskId) {
-        RewardConfig config = rewardConfigMapper.selectByType(TASK_COMPLETE);
+        return grant(userId, TASK_COMPLETE, "TASK", taskId);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public HabitRewardResponse rewardHabitCheckIn(Long userId, Long habitRecordId) {
+        TaskRewardResponse granted = grant(userId, HABIT_CHECK_IN, "HABIT_RECORD", habitRecordId);
+        HabitRewardResponse result = new HabitRewardResponse();
+        result.setGranted(granted.getGranted());
+        result.setCoin(granted.getCoin());
+        result.setExp(granted.getExp());
+        result.setWater(granted.getWater());
+        result.setCoinBalance(granted.getCoinBalance());
+        result.setExpBalance(granted.getExpBalance());
+        result.setWaterBalance(granted.getWaterBalance());
+        return result;
+    }
+
+    private TaskRewardResponse grant(Long userId, String type, String source, Long sourceId) {
+        RewardConfig config = rewardConfigMapper.selectByType(type);
         if (config == null) {
-            // 不允许没有配置时悄悄完成任务却丢失本该发放的奖励。
-            throw new IllegalStateException("缺少 TASK_COMPLETE 奖励配置，请先执行 Step3 SQL");
+            // 如果缺配置，回滚打卡/任务完成，不能悄悄丢奖励。
+            throw new IllegalStateException("缺少 " + type + " 奖励配置，请先执行对应 Step SQL");
         }
-        if (Boolean.FALSE.equals(config.getEnabled())) {
-            return emptyReward();
-        }
+        if (Boolean.FALSE.equals(config.getEnabled())) return emptyReward();
         if (!Boolean.TRUE.equals(config.getEnabled())
                 || config.getCoin() == null || config.getExp() == null || config.getWater() == null
                 || config.getCoin() < 0 || config.getExp() < 0 || config.getWater() < 0) {
-            throw new IllegalStateException("TASK_COMPLETE 奖励配置不合法");
+            throw new IllegalStateException(type + " 奖励配置不合法");
         }
 
         int coin = config.getCoin();
         long exp = config.getExp();
         int water = config.getWater();
-        if (coin == 0 && exp == 0 && water == 0) {
-            return emptyReward();
-        }
+        if (coin == 0 && exp == 0 && water == 0) return emptyReward();
 
-        int changed = userAssetMapper.addAssets(userId, coin, exp, water);
-        // MySQL 更新行和插入行的返回值可能是 1 / 2；只要有影响就是成功。
-        if (changed < 1) {
-            throw new IllegalStateException("任务奖励资产入账失败");
+        if (userAssetMapper.addAssets(userId, coin, exp, water) < 1) {
+            throw new IllegalStateException(type + " 奖励资产入账失败");
         }
-        recordIfPositive(userId, taskId, "COIN", coin);
-        recordIfPositive(userId, taskId, "EXP", exp);
-        recordIfPositive(userId, taskId, "WATER", water);
+        recordIfPositive(userId, type, source, sourceId, "COIN", coin);
+        recordIfPositive(userId, type, source, sourceId, "EXP", exp);
+        recordIfPositive(userId, type, source, sourceId, "WATER", water);
 
         UserAsset balance = userAssetMapper.selectByUserId(userId);
-        if (balance == null) {
-            throw new IllegalStateException("任务奖励资产查询失败");
-        }
-        TaskRewardResponse response = new TaskRewardResponse();
-        response.setGranted(true);
-        response.setCoin(coin);
-        response.setExp(exp);
-        response.setWater(water);
-        response.setCoinBalance(balance.getCoin());
-        response.setExpBalance(balance.getExp());
-        response.setWaterBalance(balance.getWater());
-        return response;
+        if (balance == null) throw new IllegalStateException(type + " 奖励资产查询失败");
+        TaskRewardResponse result = new TaskRewardResponse();
+        result.setGranted(true);
+        result.setCoin(coin);
+        result.setExp(exp);
+        result.setWater(water);
+        result.setCoinBalance(balance.getCoin());
+        result.setExpBalance(balance.getExp());
+        result.setWaterBalance(balance.getWater());
+        return result;
     }
 
-    private void recordIfPositive(Long userId, Long taskId, String assetType, long amount) {
-        if (amount <= 0) {
-            return;
-        }
+    private void recordIfPositive(Long userId, String action, String source, Long sourceId,
+                                  String assetType, long amount) {
+        if (amount <= 0) return;
         AssetRecord record = new AssetRecord();
         record.setUserId(userId);
-        record.setAction(TASK_COMPLETE);
+        record.setAction(action);
         record.setAssetType(assetType);
         record.setAmount(amount);
-        record.setSource("TASK");
-        record.setSourceId(taskId);
+        record.setSource(source);
+        record.setSourceId(sourceId);
         if (assetRecordMapper.insert(record) != 1) {
-            throw new IllegalStateException("任务奖励流水写入失败：" + assetType);
+            throw new IllegalStateException(action + " 奖励流水写入失败: " + assetType);
         }
     }
 
     private TaskRewardResponse emptyReward() {
-        TaskRewardResponse response = new TaskRewardResponse();
-        response.setGranted(false);
-        response.setCoin(0);
-        response.setExp(0L);
-        response.setWater(0);
-        return response;
+        TaskRewardResponse result = new TaskRewardResponse();
+        result.setGranted(false);
+        result.setCoin(0);
+        result.setExp(0L);
+        result.setWater(0);
+        return result;
     }
 }
