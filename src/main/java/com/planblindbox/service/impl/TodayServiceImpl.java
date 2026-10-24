@@ -30,6 +30,8 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Locale;
 import java.util.List;
 
 /** 只读聚合：不执行任务、不打卡、不结算奖励。 */
@@ -47,6 +49,13 @@ public class TodayServiceImpl implements TodayService {
     @Override
     @Transactional(readOnly = true)
     public TodayResponse getToday(Long userId) {
+        return getToday(userId, "time");
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public TodayResponse getToday(Long userId, String sort) {
+        String sortMode = validateSort(sort);
         if (userId == null || userId <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId 必须为正整数");
         }
@@ -58,6 +67,7 @@ public class TodayServiceImpl implements TodayService {
         LocalDateTime now = LocalDateTime.now();
         LocalDate today = now.toLocalDate();
         List<TodayResponse.TaskItem> tasks = loadTasks(userId, today, now);
+        sortTasks(tasks, sortMode);
         List<TodayResponse.HabitItem> habits = loadHabits(userId, today);
 
         TodayResponse response = new TodayResponse();
@@ -104,6 +114,8 @@ public class TodayServiceImpl implements TodayService {
             item.setStartTime(task.getStartTime());
             item.setEndTime(task.getEndTime());
             item.setPriorityScore(task.getPriorityScore());
+            item.setImportance(task.getImportance());
+            item.setDifficulty(task.getDifficulty());
             item.setStatus(task.getStatus());
             item.setTargetCount(task.getTargetCount());
             item.setTodayActualCount(todayCount);
@@ -114,6 +126,39 @@ public class TodayServiceImpl implements TodayService {
             result.add(item);
         }
         return result;
+    }
+
+    /**
+     * 按时间：截止时间升序（未设置截止时间最后），同时间按重要程度降序。
+     * 按重要程度：重要程度降序，同级按截止时间升序。
+     * 两种模式均将今天已完成的任务排到最后，再用 taskId 保证稳定顺序。
+     * importance 为 null 时仅排序按 3 处理，不回写数据库，也不改响应值。
+     */
+    private void sortTasks(List<TodayResponse.TaskItem> items, String sortMode) {
+        Comparator<TodayResponse.TaskItem> byEndTime = Comparator.comparing(
+                TodayResponse.TaskItem::getEndTime,
+                Comparator.nullsLast(Comparator.naturalOrder()));
+        Comparator<TodayResponse.TaskItem> byImportance = Comparator.comparingInt(
+                (TodayResponse.TaskItem t) -> t.getImportance() == null ? 3 : t.getImportance()).reversed();
+        Comparator<TodayResponse.TaskItem> main = "importance".equals(sortMode)
+                ? byImportance.thenComparing(byEndTime)
+                : byEndTime.thenComparing(byImportance);
+        items.sort(Comparator.comparing(TodayResponse.TaskItem::isCompletedToday)
+                .thenComparing(main)
+                .thenComparing(TodayResponse.TaskItem::getTaskId,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
+    }
+
+    private String validateSort(String sort) {
+        if (sort == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sort 不能为空");
+        }
+        String normalized = sort.toLowerCase(Locale.ROOT);
+        if (!"time".equals(normalized) && !"importance".equals(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "sort 仅支持 time 或 importance");
+        }
+        return normalized;
     }
 
     private List<TodayResponse.HabitItem> loadHabits(Long userId, LocalDate today) {

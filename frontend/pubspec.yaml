@@ -1,0 +1,20 @@
+name: plan_blind_box
+version: 0.1.0+1
+description: PlanBlindBox 个人成长管理 App - Flutter 今日首页 MVP
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
