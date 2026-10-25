@@ -119,6 +119,21 @@ public class TodayServiceImpl implements TodayService {
             item.setStatus(task.getStatus());
             item.setTargetCount(task.getTargetCount());
             item.setTodayActualCount(todayCount);
+            String recordRule = task.getRecordRule();
+
+            if (recordRule == null) {
+                item.setRecordRule(null);
+            } else {
+                try {
+                    item.setRecordRule(
+                            objectMapper.readTree(recordRule)
+                    );
+                } catch (JsonProcessingException e) {
+                    throw new IllegalStateException(
+                            "数据库 record_rule 不是合法 JSON", e
+                    );
+                }
+            }
             item.setTotalActualCount(total);
             item.setRemainingCount(Math.max(0, (long) task.getTargetCount() - total));
             item.setCompletedToday(completedToday);

@@ -4,6 +4,7 @@ import '../data/today_api.dart';
 import '../models/today_models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/dashboard_cards.dart';
+import 'dart:math';
 
 class TodayPage extends StatefulWidget {
   const TodayPage({super.key, required this.api});
@@ -62,16 +63,57 @@ class _TodayPageState extends State<TodayPage> {
   }
 
   Future<void> _completeTask(TodayTask task) async {
-    if (task.remainingCount <= 0) return;
+    if (task.remainingCount <= 0) return;//如果这个任务剩余可打卡次数已经是0，直接退出，什么都不做
+    // 2. 弹出底部弹窗（bottomSheet），让用户输入本次要提交多少数量
+    //    等待用户关闭弹窗，拿到用户输入的 count（int? 类型，用户取消就是 null）
     final count = await showModalBottomSheet<int>(
+    //弹出一个**底部抽屉弹窗**，等待用户操作，弹窗关闭后把用户选 / 填的数字返回给变量 `count`。
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) => _RecordCountSheet(task: task),
     );
+    // 3. 用户点了取消（count==null） / 页面已经销毁，直接返回，不发请求
     if (count == null || !mounted) return;
+    // 4. 调用封装好的 _execute 函数：上锁 → 调用后端接口 completeTask，参数 taskId + 用户填的数量count
     await _execute('task-${task.id}', () => widget.api.completeTask(
           taskId: task.id, actualCount: count));
+  }
+
+  Future<void> _quickCompleteTask(TodayTask task) async {
+    // 1. 判断是否可以继续记录
+    if (task.completedToday || task.remainingCount <= 0) {
+      return;
+    }
+
+    // 2. 计算本次预计记录数量
+    final actualCount = min(
+      task.recordCount,
+      task.remainingCount,
+    );
+
+    // 3. 通过现有执行流程提交后端
+    await _execute(
+      'task-${task.id}',
+          () => widget.api.completeTask(
+        taskId: task.id,
+        actualCount: actualCount,
+      ),
+    );
+  }
+
+  Future<void> _recordTask(TodayTask task) async {
+    // 任务已完成或没有剩余数量，不再执行
+    if (task.completedToday || task.remainingCount <= 0) {
+      return;
+    }
+
+    // 根据记录模式选择执行方法
+    if (task.recordMode == 'MANUAL') {
+      await _completeTask(task);
+    } else {
+      await _quickCompleteTask(task);
+    }
   }
 
   Future<void> _checkIn(TodayHabit habit) async {
@@ -156,10 +198,11 @@ class _TodayPageState extends State<TodayPage> {
                       icon: Icons.task_alt_rounded)
                 else
                   ...data.tasks.map((task) => Padding(
-                    padding: const EdgeInsets.only(bottom: 11),
+                    //遍历任务列表，**每一个 task 生成一个 Padding + TaskTile**
+                    padding: const EdgeInsets.only(bottom: 11),  //卡片间距
                     child: TaskTile(task: task, todayDate: data.date,
-                      busy: _busy.contains('task-${task.id}'),
-                      onComplete: () => _completeTask(task)),
+                      busy: _busy.contains('task-${task.id}'),//按任务 ID 单独加锁，而不是全局一把锁
+                      onComplete: () => _recordTask(task)),//点击卡片触发 `_completeTask(task)`
                   )),
                 const SizedBox(height: 18),
                 SectionHeading(title: '每日习惯',
@@ -328,6 +371,9 @@ class _TaskComposerState extends State<TaskComposer> {
   final _title = TextEditingController();
   final _note = TextEditingController();
   final _target = TextEditingController(text: '1');
+  String _recordMode = 'DEFAULT';
+  final TextEditingController _fixedCount =
+  TextEditingController(text: '5');
   int _importance = 3;
   int _difficulty = 3;
   DateTime _end = DateTime.now().add(const Duration(hours: 2));
@@ -336,7 +382,11 @@ class _TaskComposerState extends State<TaskComposer> {
 
   @override
   void dispose() {
-    _title.dispose(); _note.dispose(); _target.dispose(); super.dispose();
+    _title.dispose();
+    _note.dispose();
+    _target.dispose();
+    _fixedCount.dispose();
+    super.dispose();
   }
 
   Future<void> _pickEnd() async {
@@ -358,11 +408,37 @@ class _TaskComposerState extends State<TaskComposer> {
       setState(() => _error = '请填写标题、正整数目标次数以及未来的截止时间');
       return;
     }
+    // 根据用户选择，生成任务记录规则
+    final Map<String, dynamic> recordRule;
+
+    if (_recordMode == 'FIXED') {
+      final fixedCount = int.tryParse(_fixedCount.text.trim());
+
+      if (fixedCount == null || fixedCount <= 0) {
+        setState(() => _error = '每次记录数量必须是正整数');
+        return;
+      }
+
+      recordRule = {
+        'mode': 'FIXED',
+        'count': fixedCount,
+      };
+    } else {
+      recordRule = {
+        'mode': _recordMode,
+      };
+    }
     setState(() { _saving = true; _error = null; });
     try {
-      await widget.api.createTask(title: title, note: _note.text.trim(),
-          targetCount: count, importance: _importance,
-          difficulty: _difficulty, endTime: _end);
+      await widget.api.createTask(
+          title: title,
+          note: _note.text.trim(),
+          targetCount: count,
+          importance: _importance,
+          difficulty: _difficulty,
+          endTime: _end,
+          recordRule: recordRule,
+      );
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -384,6 +460,62 @@ class _TaskComposerState extends State<TaskComposer> {
       TextField(controller: _target, keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           decoration: const InputDecoration(labelText: '目标次数 *')),
+
+  const SizedBox(height: 15),
+
+  const Align(
+  alignment: Alignment.centerLeft,
+  child: Text(
+  '记录方式',
+  style: TextStyle(fontWeight: FontWeight.w600),
+  ),
+  ),
+
+  const SizedBox(height: 8),
+
+  Wrap(
+  spacing: 8,
+  runSpacing: 8,
+  children: [
+  ChoiceChip(
+  label: const Text('默认 +1'),
+  selected: _recordMode == 'DEFAULT',
+  onSelected: (_) {
+  setState(() => _recordMode = 'DEFAULT');
+  },
+  ),
+  ChoiceChip(
+  label: const Text('固定数量'),
+  selected: _recordMode == 'FIXED',
+  onSelected: (_) {
+  setState(() => _recordMode = 'FIXED');
+  },
+  ),
+  ChoiceChip(
+  label: const Text('手动输入'),
+  selected: _recordMode == 'MANUAL',
+  onSelected: (_) {
+  setState(() => _recordMode = 'MANUAL');
+  },
+  ),
+  ],
+  ),
+
+  if (_recordMode == 'FIXED') ...[
+  const SizedBox(height: 10),
+  TextField(
+  controller: _fixedCount,
+  keyboardType: TextInputType.number,
+  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+  decoration: const InputDecoration(
+  labelText: '每次记录数量 *',
+  hintText: '例如：5',
+  ),
+  ),
+  ],
+
+  const SizedBox(height: 15),
+
       const SizedBox(height: 15),
       _rating('重要程度（决定排序）', _importance, (n) => setState(() => _importance = n)),
       const SizedBox(height: 9),

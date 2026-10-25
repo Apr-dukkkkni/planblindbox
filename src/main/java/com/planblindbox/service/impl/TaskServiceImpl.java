@@ -1,5 +1,8 @@
 package com.planblindbox.service.impl;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.planblindbox.dto.request.TaskCompleteRequest;
 import com.planblindbox.dto.response.TaskCompleteResponse;
 import com.planblindbox.dto.response.TaskRewardResponse;
@@ -31,6 +34,7 @@ public class TaskServiceImpl implements TaskService {
     private final TaskMapper taskMapper;
     private final TaskRecordMapper taskRecordMapper;
     private final RewardService rewardService;
+    private final ObjectMapper objectMapper;
 
 
     @Override
@@ -49,9 +53,10 @@ public class TaskServiceImpl implements TaskService {
         task.setStartTime(request.getStartTime());
         task.setEndTime(request.getEndTime());
         task.setTargetCount(request.getTargetCount());
-
+        task.setRecordRule(
+                validateAndSerializeRecordRule(request.getRecordRule())
+        );
         task.setStatus(TaskStatus.PENDING);
-
         task.setImportance(request.getImportance());
         task.setUrgency(request.getUrgency());
         task.setDifficulty(request.getDifficulty());
@@ -77,6 +82,85 @@ public class TaskServiceImpl implements TaskService {
         Task task = getEntity(userId, taskId);
 
         return toResponse(task);
+    }
+
+
+    private String validateAndSerializeRecordRule(JsonNode rule) {
+
+        // 1. 没有传规则，兼容旧任务，返回 null
+        if (rule == null || rule.isNull()) {
+            return null;
+        }
+
+        // 2. 必须是 JSON 对象
+        if (!rule.isObject()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "recordRule 必须是 JSON 对象"
+            );
+        }
+
+        // 3. 必须包含字符串类型的 mode
+        JsonNode modeNode = rule.get("mode");
+
+        if (modeNode == null || !modeNode.isTextual()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "recordRule 必须包含字符串类型的 mode"
+            );
+        }
+
+        String mode = modeNode.asText();
+
+        // 4. 根据不同模式校验规则
+        switch (mode) {
+
+            case "DEFAULT":
+            case "MANUAL":
+                // 这两种模式只允许 mode 字段
+                if (rule.size() != 1) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            mode + " 模式只允许 mode 字段"
+                    );
+                }
+                break;
+
+            case "FIXED":
+                JsonNode countNode = rule.get("count");
+
+                // 必须包含 mode、count 两个字段
+                if (rule.size() != 2
+                        || countNode == null
+                        || !countNode.isIntegralNumber()
+                        || !countNode.canConvertToInt()
+                        || countNode.intValue() <= 0) {
+
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "FIXED 模式必须提供正整数 count"
+                    );
+                }
+                break;
+
+            default:
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "不支持的记录模式：" + mode
+                );
+        }
+
+        // 5. 校验成功，将 JSON 转换成字符串
+        try {
+            return objectMapper.writeValueAsString(rule);
+
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "recordRule 无法序列化",
+                    e
+            );
+        }
     }
 
 
@@ -148,8 +232,16 @@ public class TaskServiceImpl implements TaskService {
             task.setEndTime(request.getEndTime());
         }
 
+        // 修改任务目标数量
         if (request.getTargetCount() != null) {
             task.setTargetCount(request.getTargetCount());
+        }
+
+// 修改任务记录规则
+        if (request.getRecordRule() != null) {
+            task.setRecordRule(
+                    validateAndSerializeRecordRule(request.getRecordRule())
+            );
         }
 
         if (request.getStatus() != null) {
@@ -210,16 +302,23 @@ public class TaskServiceImpl implements TaskService {
             throw new IllegalStateException("Task 目标数量不合法");
         }
 
+        int requested = request.getActualCount();
+        int total = task.getTargetCount();
         long totalBefore = taskRecordMapper.sumActualCount(taskId);
-        int increment = request.getActualCount();
-        long totalAfter = totalBefore + (long) increment;
-        if (totalBefore >= task.getTargetCount()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "历史数量已达到目标，请检查任务状态");
+// ① 检查是否已经达到目标
+        if (totalBefore >= total) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "历史数量已达到目标，请检查任务状态"
+            );
         }
-        if (totalAfter > task.getTargetCount()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "本次提交超过剩余数量：" + (task.getTargetCount() - totalBefore));
-        }
+// ② 计算剩余数量
+        long remaining = total - totalBefore;
+// ③ 取请求数量与剩余数量的较小值
+        int increment = (int) Math.min(requested, remaining);
+// ④ 计算实际累计数量
+        long totalAfter = totalBefore + increment;
+
 
         LocalDateTime now = LocalDateTime.now();
         LocalDate today = now.toLocalDate();
@@ -316,6 +415,23 @@ public class TaskServiceImpl implements TaskService {
         response.setStartTime(task.getStartTime());
         response.setEndTime(task.getEndTime());
         response.setTargetCount(task.getTargetCount());
+        String recordRule = task.getRecordRule();
+
+        if (recordRule == null){
+            response.setRecordRule(null);
+        }else{
+            try {
+                //把数据库存的 JSON 字符串，解析成 Jackson 的`JsonNode`树形对象
+                response.setRecordRule(
+                        objectMapper.readTree(recordRule)
+                );
+            }catch (JsonProcessingException e) {
+                throw new IllegalStateException(
+                        "数据库 record_rule 不是合法 JSON", e
+                );
+            }
+        }
+
         response.setStatus(task.getStatus());
         response.setImportance(task.getImportance());
         response.setUrgency(task.getUrgency());

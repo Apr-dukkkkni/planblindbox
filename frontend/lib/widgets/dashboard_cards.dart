@@ -165,8 +165,13 @@ class AssetStrip extends StatelessWidget {
 
 class TaskTile extends StatefulWidget {
   //任务卡片
-  const TaskTile({super.key, required this.task, required this.todayDate,
-    required this.busy, required this.onComplete});
+  const TaskTile({
+    super.key,
+    required this.task,
+    required this.todayDate,
+    required this.busy,
+    required this.onComplete
+  });
 
   final TodayTask task;       // 单条任务实体
   final String todayDate;     // 今天日期，用来判断逾期是否是今天逾期

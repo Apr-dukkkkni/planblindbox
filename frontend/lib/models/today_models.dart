@@ -49,6 +49,7 @@ class TodayTask {
     required this.difficulty,
     required this.status,
     required this.targetCount,
+    this.recordRule,
     required this.todayActualCount,
     required this.totalActualCount,
     required this.remainingCount,
@@ -64,6 +65,7 @@ class TodayTask {
   final int? difficulty;
   final String status;
   final int targetCount;
+  final Map<String, dynamic>? recordRule;
   final int todayActualCount;
   final int totalActualCount;
   final int remainingCount;
@@ -79,6 +81,9 @@ class TodayTask {
         difficulty: json['difficulty'] == null ? null : _int(json['difficulty']),
         status: json['status']?.toString() ?? 'PENDING',
         targetCount: _int(json['targetCount']),
+        recordRule: json['recordRule'] == null
+            ? null
+            : Map<String, dynamic>.from(json['recordRule'] as Map),
         todayActualCount: _int(json['todayActualCount']),
         totalActualCount: _int(json['totalActualCount']),
         remainingCount: _int(json['remainingCount']),
@@ -89,6 +94,32 @@ class TodayTask {
   double get progress => targetCount <= 0
       ? 0
       : (totalActualCount / targetCount).clamp(0.0, 1.0).toDouble();
+
+  String get recordMode {
+    if (recordRule == null) return 'DEFAULT';
+
+    final mode = recordRule!['mode'];
+
+    if (mode == 'DEFAULT' ||
+        mode == 'FIXED' ||
+        mode == 'MANUAL') {
+      return mode as String;
+    }
+
+    throw FormatException('不支持的任务记录模式: $mode');
+  }
+
+  int get recordCount {
+    if (recordMode != 'FIXED') return 1;
+
+    final count = recordRule?['count'];
+
+    if (count is int && count > 0) {
+      return count;
+    }
+
+    throw const FormatException('FIXED 模式缺少合法的 count');
+  }
 }
 
 class TodayHabit {

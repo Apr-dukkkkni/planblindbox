@@ -1,5 +1,6 @@
 package com.planblindbox.dto.response;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.planblindbox.enums.TaskStatus;
 import lombok.Data;
 
@@ -20,6 +21,8 @@ public class TaskResponse {
     private LocalDateTime endTime;
 
     private Integer targetCount;
+
+    private JsonNode recordRule;
 
     private TaskStatus status;
 

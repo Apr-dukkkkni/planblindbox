@@ -1,5 +1,7 @@
 package com.planblindbox.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.planblindbox.enums.TaskStatus;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -21,6 +23,7 @@ public class TaskUpdateRequest {
 
     @Min(1)
     private Integer targetCount;
+    private JsonNode recordRule;
 
     private TaskStatus status;
 

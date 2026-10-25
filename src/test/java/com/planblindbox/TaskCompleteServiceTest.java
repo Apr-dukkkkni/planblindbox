@@ -3,6 +3,7 @@ package com.planblindbox;
 import com.planblindbox.dto.request.TaskCompleteRequest;
 import com.planblindbox.dto.request.TaskUpdateRequest;
 import com.planblindbox.dto.response.TaskCompleteResponse;
+import com.planblindbox.entity.Habit;
 import com.planblindbox.entity.Task;
 import com.planblindbox.entity.TaskRecord;
 import com.planblindbox.enums.TaskRecordStatus;
@@ -82,19 +83,124 @@ class TaskCompleteServiceTest {
         assertEquals(100L, taskRecordMapper.sumActualCount(task.getTaskId()));
     }
 
+    // 测试1：从0开始，超额提交后自动封顶
     @Test
-    void shouldRejectOverflowAndArchivedTask() {
+    void shouldCapOverflowToTarget() {
+        // 创建目标数量为5的任务
         Task task = newTask(5);
-        ResponseStatusException overflow = assertThrows(ResponseStatusException.class,
-                () -> taskService.complete(task.getUserId(), task.getTaskId(), request(6)));
-        assertEquals(400, overflow.getStatusCode().value());
-        assertEquals(0L, taskRecordMapper.sumActualCount(task.getTaskId()));
 
-        taskService.delete(task.getUserId(), task.getTaskId());
-        ResponseStatusException archived = assertThrows(ResponseStatusException.class,
-                () -> taskService.complete(task.getUserId(), task.getTaskId(), request(1)));
-        assertEquals(409, archived.getStatusCode().value());
+        // 提交6次，预期实际只记录5次
+        TaskCompleteResponse response = taskService.complete(
+                task.getUserId(),
+                task.getTaskId(),
+                request(6)
+        );
+
+        // 验证返回结果
+        assertEquals(5, response.getIncrementCount());
+        assertEquals(5L, response.getTotalActualCount());
+        assertEquals(0, response.getRemainingCount());
+        assertEquals(TaskStatus.COMPLETED, response.getStatus());
+
+        // 验证持久化层记录的累计数量
+        assertEquals(
+                5L,
+                taskRecordMapper.sumActualCount(task.getTaskId())
+        );
     }
+
+
+    // 测试2：已完成部分进度，超额提交自动补齐
+    @Test
+    void shouldCapOverflowToRemaining() {
+        // 创建目标数量为10的任务
+        Task task = newTask(10);
+
+        // 第一次提交8次
+        TaskCompleteResponse first = taskService.complete(
+                task.getUserId(),
+                task.getTaskId(),
+                request(8)
+        );
+
+        // 此时尚未完成任务
+        assertEquals(8, first.getIncrementCount());
+        assertEquals(8L, first.getTotalActualCount());
+        assertEquals(2, first.getRemainingCount());
+        assertEquals(TaskStatus.IN_PROGRESS, first.getStatus());
+
+        // 第二次提交5次，但实际只剩2次
+        TaskCompleteResponse second = taskService.complete(
+                task.getUserId(),
+                task.getTaskId(),
+                request(5)
+        );
+
+        // 验证自动补齐结果
+        assertEquals(2, second.getIncrementCount());
+        assertEquals(10L, second.getTotalActualCount());
+        assertEquals(0, second.getRemainingCount());
+        assertEquals(TaskStatus.COMPLETED, second.getStatus());
+
+        // 验证累计进度没有超过目标
+        assertEquals(
+                10L,
+                taskRecordMapper.sumActualCount(task.getTaskId())
+        );
+
+        // 完成后再次提交，应该被拒绝
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> taskService.complete(
+                        task.getUserId(),
+                        task.getTaskId(),
+                        request(1)
+                )
+        );
+
+        assertEquals(409, exception.getStatusCode().value());
+
+        // 拒绝后，累计数量必须保持不变
+        assertEquals(
+                10L,
+                taskRecordMapper.sumActualCount(task.getTaskId())
+        );
+    }
+
+
+    // 测试3：已归档任务不允许继续记录
+    @Test
+    void shouldRejectArchivedTask() {
+        // 创建任务
+        Task task = newTask(5);
+
+        // 归档任务
+        taskService.delete(
+                task.getUserId(),
+                task.getTaskId()
+        );
+
+        // 归档后尝试记录进度
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> taskService.complete(
+                        task.getUserId(),
+                        task.getTaskId(),
+                        request(1)
+                )
+        );
+
+        // 预期返回409冲突
+        assertEquals(409, exception.getStatusCode().value());
+
+        // 验证没有新增执行数量
+        assertEquals(
+                0L,
+                taskRecordMapper.sumActualCount(task.getTaskId())
+        );
+    }
+
+
 
     @Test
     void shouldPreventBypassingCompletionByPut() {

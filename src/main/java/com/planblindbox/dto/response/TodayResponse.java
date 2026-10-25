@@ -1,6 +1,7 @@
 package com.planblindbox.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.planblindbox.enums.TaskStatus;
 import lombok.Data;
 
@@ -33,6 +34,7 @@ public class TodayResponse {
         private Integer difficulty;
         private TaskStatus status;
         private Integer targetCount;
+        private JsonNode recordRule;
         private int todayActualCount;
         private long totalActualCount;
         private long remainingCount;

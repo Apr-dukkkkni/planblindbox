@@ -1,5 +1,6 @@
 package com.planblindbox.dto.request;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -26,6 +27,8 @@ public class TaskCreateRequest {
 
     @Min(1)
     private Integer targetCount = 1;
+
+    private JsonNode recordRule;
 
     @Min(1)
     @Max(5)

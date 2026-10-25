@@ -90,6 +90,7 @@ class TodayApi {
     required int importance,
     required int difficulty,
     required DateTime endTime,
+    Map<String, dynamic>? recordRule,
   }) async {
     await _request('POST', _url('/tasks'), body: {
       'userId': userId,
@@ -100,6 +101,7 @@ class TodayApi {
       'targetCount': targetCount,
       'importance': importance,
       'difficulty': difficulty,
+      if (recordRule != null) 'recordRule': recordRule,
     });
   }
 
