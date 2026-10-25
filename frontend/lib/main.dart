@@ -3,6 +3,7 @@ import 'config/api_config.dart';
 import 'data/today_api.dart';
 import 'screens/today_page.dart';
 import 'theme/app_theme.dart';
+import 'screens/app_shell.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +31,6 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
         title: 'PlanBlindBox · 每天一点成长',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
-        home: TodayPage(api: _api),
+        home: AppShell(api: _api),
       );
 }

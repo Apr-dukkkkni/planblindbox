@@ -5,6 +5,7 @@ import '../models/today_models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/dashboard_cards.dart';
 import 'dart:math';
+import 'task_library_page.dart';
 
 class TodayPage extends StatefulWidget {
   const TodayPage({super.key, required this.api});
@@ -103,12 +104,12 @@ class _TodayPageState extends State<TodayPage> {
   }
 
   Future<void> _recordTask(TodayTask task) async {
-    // 任务已完成或没有剩余数量，不再执行
-    if (task.completedToday || task.remainingCount <= 0) {
+    if (task.overdue ||
+        task.completedToday ||
+        task.remainingCount <= 0) {
       return;
     }
 
-    // 根据记录模式选择执行方法
     if (task.recordMode == 'MANUAL') {
       await _completeTask(task);
     } else {
@@ -130,6 +131,38 @@ class _TodayPageState extends State<TodayPage> {
     if (succeeded == true && mounted) {
       _message('新任务创建成功');
       await _load();
+    }
+  }
+
+  Future<void> _editTask(TodayTask task) async {
+    if (task.overdue) {
+      _message('任务已逾期，请使用重新安排功能');
+      return;
+    }
+
+    try {
+      final detail = await widget.api.getTask(task.id);
+
+      if (!mounted) return;
+
+      final succeeded = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) => TaskComposer(
+          api: widget.api,
+          taskDetail: detail,
+        ),
+      );
+
+      if (succeeded == true && mounted) {
+        _message('任务修改成功');
+        await _load();
+      }
+    } catch (error) {
+      if (mounted) {
+        _message('编辑任务失败：$error');
+      }
     }
   }
 
@@ -170,6 +203,20 @@ class _TodayPageState extends State<TodayPage> {
             padding: const EdgeInsets.fromLTRB(20, 15, 20, 35),
             children: [
               _topBar(),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.folder_outlined),
+                  label: const Text('我的任务库'),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => TaskLibraryPage(api: widget.api),
+                      ),
+                    );
+                  },
+                ),
+              ),
               const SizedBox(height: 18),
               if (_loading && data != null)
                 const LinearProgressIndicator(minHeight: 2, color: AppColors.leaf),
@@ -200,9 +247,12 @@ class _TodayPageState extends State<TodayPage> {
                   ...data.tasks.map((task) => Padding(
                     //遍历任务列表，**每一个 task 生成一个 Padding + TaskTile**
                     padding: const EdgeInsets.only(bottom: 11),  //卡片间距
-                    child: TaskTile(task: task, todayDate: data.date,
+                    child: TaskTile(task: task,
+                      todayDate: data.date,
                       busy: _busy.contains('task-${task.id}'),//按任务 ID 单独加锁，而不是全局一把锁
-                      onComplete: () => _recordTask(task)),//点击卡片触发 `_completeTask(task)`
+                      onComplete: () => _recordTask(task),
+                      onEdit: () => _editTask(task),
+                    ),//点击卡片触发 `_completeTask(task)`
                   )),
                 const SizedBox(height: 18),
                 SectionHeading(title: '每日习惯',
@@ -361,8 +411,19 @@ class _RecordCountSheetState extends State<_RecordCountSheet> {
 }
 
 class TaskComposer extends StatefulWidget {
-  const TaskComposer({super.key, required this.api});
+  const TaskComposer({
+    super.key,
+    required this.api,
+    this.taskDetail,
+  });
+
   final TodayApi api;
+
+  // 编辑时传入完整任务信息；创建时为 null
+  final Map<String, dynamic>? taskDetail;
+
+  bool get isEditing => taskDetail != null;
+
   @override
   State<TaskComposer> createState() => _TaskComposerState();
 }
@@ -376,9 +437,53 @@ class _TaskComposerState extends State<TaskComposer> {
   TextEditingController(text: '5');
   int _importance = 3;
   int _difficulty = 3;
-  DateTime _end = DateTime.now().add(const Duration(hours: 2));
+  DateTime? _end;
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // 创建模式继续使用原来的默认值
+    final detail = widget.taskDetail;
+    if (detail == null) return;
+
+    // 1. 初始化基础信息
+    _title.text = detail['title']?.toString() ?? '';
+    _note.text = detail['note']?.toString() ?? '';
+    _target.text = detail['targetCount']?.toString() ?? '1';
+
+    // 2. 初始化重要程度和难度
+    _importance = (detail['importance'] as num?)?.toInt() ?? 3;
+    _difficulty = (detail['difficulty'] as num?)?.toInt() ?? 3;
+
+    // 3. 初始化截止时间
+    final endTime = DateTime.tryParse(
+      detail['endTime']?.toString() ?? '',
+    );
+
+    if (endTime != null) {
+      _end = endTime;
+    }
+
+    // 4. 初始化记录规则
+    final rule = detail['recordRule'];
+
+    if (rule is Map) {
+      final mode = rule['mode'];
+
+      if (mode == 'DEFAULT' ||
+          mode == 'FIXED' ||
+          mode == 'MANUAL') {
+        _recordMode = mode as String;
+      }
+
+      if (_recordMode == 'FIXED') {
+        _fixedCount.text = rule['count']?.toString() ?? '';
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -390,21 +495,43 @@ class _TaskComposerState extends State<TaskComposer> {
   }
 
   Future<void> _pickEnd() async {
-    final date = await showDatePicker(context: context,
-        initialDate: _end,
-        firstDate: DateTime.now().subtract(const Duration(days: 1)),
-        lastDate: DateTime.now().add(const Duration(days: 365 * 5)));
+    final now = DateTime.now();
+
+    final initial = _end != null && _end!.isAfter(now)
+        ? _end!
+        : now.add(const Duration(hours: 2));
+
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: now.add(const Duration(days: 365 * 5)),
+    );
+
     if (date == null || !mounted) return;
-    final time = await showTimePicker(context: context,
-        initialTime: TimeOfDay.fromDateTime(_end));
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+
     if (time == null || !mounted) return;
-    setState(() => _end = DateTime(date.year, date.month, date.day, time.hour, time.minute));
+
+    setState(() {
+      _end = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
+    });
   }
 
   Future<void> _save() async {
     final title = _title.text.trim();
     final count = int.tryParse(_target.text.trim());
-    if (title.isEmpty || count == null || count < 1 || _end.isBefore(DateTime.now())) {
+    if (title.isEmpty || count == null || count < 1 || (_end != null && !_end!.isAfter(DateTime.now()))) {
       setState(() => _error = '请填写标题、正整数目标次数以及未来的截止时间');
       return;
     }
@@ -430,7 +557,27 @@ class _TaskComposerState extends State<TaskComposer> {
     }
     setState(() { _saving = true; _error = null; });
     try {
-      await widget.api.createTask(
+      if (widget.isEditing) {
+        final detail = widget.taskDetail!;
+        final taskId = (detail['taskId'] as num).toInt();
+
+        // 编辑时必须有有效的截止时间
+        if (_end == null || !_end!.isAfter(DateTime.now())) {
+          throw Exception('请重新选择未来的截止时间');
+        }
+
+        await widget.api.updateTask(
+          taskId: taskId,
+          title: title,
+          note: _note.text.trim(),
+          targetCount: count,
+          importance: _importance,
+          difficulty: _difficulty,
+          endTime: _end!,
+          recordRule: recordRule,
+        );
+      } else {
+        await widget.api.createTask(
           title: title,
           note: _note.text.trim(),
           targetCount: count,
@@ -438,7 +585,8 @@ class _TaskComposerState extends State<TaskComposer> {
           difficulty: _difficulty,
           endTime: _end,
           recordRule: recordRule,
-      );
+        );
+      }
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -449,7 +597,7 @@ class _TaskComposerState extends State<TaskComposer> {
 
   @override
   Widget build(BuildContext context) => _sheetLayout(context,
-    title: '创建新任务',
+    title: widget.isEditing ? '编辑任务' : '创建新任务',
     children: [
       TextField(controller: _title, maxLength: 100,
           decoration: const InputDecoration(labelText: '任务标题 *', hintText: '例如：复习 Java 集合')),
@@ -521,8 +669,25 @@ class _TaskComposerState extends State<TaskComposer> {
       const SizedBox(height: 9),
       _rating('任务难度（奖励算法后续接入）', _difficulty, (n) => setState(() => _difficulty = n)),
       const SizedBox(height: 12),
-      OutlinedButton.icon(onPressed: _pickEnd, icon: const Icon(Icons.event_outlined),
-          label: Text('截止：${_end.month}/${_end.day} ${_end.hour.toString().padLeft(2, '0')}:${_end.minute.toString().padLeft(2, '0')}')),
+  OutlinedButton.icon(
+  onPressed: _pickEnd,
+  icon: const Icon(Icons.event_outlined),
+  label: Text(
+  _end == null
+  ? '截止：默认下一次凌晨 5:00'
+      : '截止：${_end!.month}/${_end!.day} '
+  '${_end!.hour.toString().padLeft(2, '0')}:'
+  '${_end!.minute.toString().padLeft(2, '0')}',
+  ),
+  ),
+
+  if (_end != null && !widget.isEditing)
+  TextButton(
+  onPressed: () {
+  setState(() => _end = null);
+  },
+  child: const Text('恢复默认截止时间'),
+  ),
       if (_error != null) Padding(padding: const EdgeInsets.only(top: 10),
           child: Text(_error!, style: const TextStyle(color: AppColors.rose, fontSize: 12))),
       const SizedBox(height: 16),
@@ -530,7 +695,7 @@ class _TaskComposerState extends State<TaskComposer> {
         onPressed: _saving ? null : _save,
         style: FilledButton.styleFrom(backgroundColor: AppColors.forest,
           minimumSize: const Size.fromHeight(50)),
-        child: Text(_saving ? '正在创建…' : '创建任务'),
+        child: Text(_saving ? (widget.isEditing ? '正在保存…' : '正在创建…') : (widget.isEditing ? '保存修改' : '创建任务')),
       )),
     ],
   );

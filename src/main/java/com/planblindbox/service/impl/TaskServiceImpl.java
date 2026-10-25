@@ -17,6 +17,7 @@ import com.planblindbox.mapper.TaskMapper;
 import com.planblindbox.mapper.TaskRecordMapper;
 import com.planblindbox.service.TaskService;
 import com.planblindbox.service.RewardService;
+import com.planblindbox.util.BusinessTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -40,18 +41,35 @@ public class TaskServiceImpl implements TaskService {
     @Override
     public TaskResponse create(TaskCreateRequest request) {
 
-        checkTime(
-                request.getStartTime(),
-                request.getEndTime()
-        );
+        LocalDateTime now = LocalDateTime.now();
+
+        LocalDateTime effectiveStart =
+                request.getStartTime() != null
+                        ? request.getStartTime()
+                        : now;
+
+        LocalDateTime effectiveEnd =
+                request.getEndTime() != null
+                        ? request.getEndTime()
+                        : BusinessTime.nextReset(effectiveStart);
+
+        checkTime(effectiveStart, effectiveEnd);
+
+        if (!effectiveEnd.isAfter(now)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "截止时间必须晚于当前时间"
+            );
+        }
 
         Task task = new Task();
 
         task.setUserId(request.getUserId());
         task.setTitle(request.getTitle());
         task.setNote(request.getNote());
-        task.setStartTime(request.getStartTime());
-        task.setEndTime(request.getEndTime());
+        task.setStartTime(effectiveStart);
+        task.setEndTime(effectiveEnd);
+        task.setEndTime(effectiveEnd);
         task.setTargetCount(request.getTargetCount());
         task.setRecordRule(
                 validateAndSerializeRecordRule(request.getRecordRule())
@@ -232,6 +250,10 @@ public class TaskServiceImpl implements TaskService {
             task.setEndTime(request.getEndTime());
         }
 
+        if (request.getEndTime() != null) {
+            task.setEndTime(request.getEndTime());
+        }
+
         // 修改任务目标数量
         if (request.getTargetCount() != null) {
             task.setTargetCount(request.getTargetCount());
@@ -302,6 +324,23 @@ public class TaskServiceImpl implements TaskService {
             throw new IllegalStateException("Task 目标数量不合法");
         }
 
+        LocalDateTime now = LocalDateTime.now();
+
+        LocalDateTime deadline = BusinessTime.effectiveDeadline(
+                task.getEndTime(),
+                task.getStartTime(),
+                task.getCreateTime()
+        );
+
+        if (deadline != null && !now.isBefore(deadline)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "任务已经过期，请重新安排任务"
+            );
+        }
+
+        LocalDate today = BusinessTime.businessDate(now);
+
         int requested = request.getActualCount();
         int total = task.getTargetCount();
         long totalBefore = taskRecordMapper.sumActualCount(taskId);
@@ -320,8 +359,6 @@ public class TaskServiceImpl implements TaskService {
         long totalAfter = totalBefore + increment;
 
 
-        LocalDateTime now = LocalDateTime.now();
-        LocalDate today = now.toLocalDate();
         boolean completed = totalAfter == task.getTargetCount();
         TaskRecord record = taskRecordMapper.selectByTaskIdAndDate(taskId, today);
         int todayActualCount;

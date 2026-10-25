@@ -19,6 +19,7 @@ import com.planblindbox.mapper.TaskRecordMapper;
 import com.planblindbox.mapper.UserAssetMapper;
 import com.planblindbox.service.HabitCheckInService;
 import com.planblindbox.service.TodayService;
+import com.planblindbox.util.BusinessTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -65,7 +66,7 @@ public class TodayServiceImpl implements TodayService {
 
         // 与现有 Task Complete / Habit Check-in 一样，使用服务器默认时区的今天。
         LocalDateTime now = LocalDateTime.now();
-        LocalDate today = now.toLocalDate();
+        LocalDate today = BusinessTime.businessDate(now);
         List<TodayResponse.TaskItem> tasks = loadTasks(userId, today, now);
         sortTasks(tasks, sortMode);
         List<TodayResponse.HabitItem> habits = loadHabits(userId, today);
@@ -86,7 +87,25 @@ public class TodayServiceImpl implements TodayService {
                 continue;
             }
             // 今天以后才开始的任务，不属于今日待办。
-            if (task.getStartTime() != null && task.getStartTime().toLocalDate().isAfter(today)) {
+            // 判断任务是否真正到了开始时间
+            if (task.getStartTime() != null
+                    && task.getStartTime().isAfter(now)) {
+                continue;
+            }
+
+
+            LocalDateTime deadline = BusinessTime.effectiveDeadline(
+                    task.getEndTime(),
+                    task.getStartTime(),
+                    task.getCreateTime()
+            );
+
+            LocalDateTime businessDayStart =
+                    today.atTime(5, 0);
+
+// 到达新业务日后，移除上一周期已过期的任务
+            if (deadline != null &&
+                    !deadline.isAfter(businessDayStart)) {
                 continue;
             }
 
@@ -137,7 +156,11 @@ public class TodayServiceImpl implements TodayService {
             item.setTotalActualCount(total);
             item.setRemainingCount(Math.max(0, (long) task.getTargetCount() - total));
             item.setCompletedToday(completedToday);
-            item.setOverdue(!completedToday && task.getEndTime() != null && now.isAfter(task.getEndTime()));
+            item.setOverdue(
+                    !completedToday
+                            && deadline != null
+                            && !now.isBefore(deadline)
+            );
             result.add(item);
         }
         return result;

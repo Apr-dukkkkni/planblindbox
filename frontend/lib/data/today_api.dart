@@ -33,6 +33,14 @@ class TodayApi {
         case 'POST':
           response = await _client.post(uri, headers: headers,
               body: body == null ? null : jsonEncode(body)).timeout(const Duration(seconds: 12));
+
+        case 'PUT':
+          response = await _client.put(
+            uri,
+            headers: headers,
+            body: body == null ? null : jsonEncode(body),
+          ).timeout(const Duration(seconds: 12));
+
         default:
           throw ApiException('不支持的请求方法：$method');
       }
@@ -54,7 +62,14 @@ class TodayApi {
         );
       }
       final payload = envelope['data'];
-      return payload is Map ? Map<String, dynamic>.from(payload) : <String, dynamic>{};
+
+      if (payload is List) {
+        return {'items': payload};
+      }
+
+      return payload is Map
+          ? Map<String, dynamic>.from(payload)
+          : <String, dynamic>{};
     } on ApiException {
       rethrow;
     } on Exception catch (error) {
@@ -62,11 +77,33 @@ class TodayApi {
     }
   }
 
+  Future<List<Map<String, dynamic>>> getAllTasks() async {
+    final result = await _request(
+      'GET',
+      _url('/tasks', {'userId': '$userId'}),
+    );
+
+    final items = result['items'] as List? ?? [];
+
+    return items
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+  }
+
   Future<TodayData> getToday({String sort = 'time'}) async {
     final data = await _request('GET', _url('/today', {
       'userId': '$userId', 'sort': sort,
     }));
     return TodayData.fromJson(data);
+  }
+
+  Future<Map<String, dynamic>> getTask(int taskId) async {
+    return await _request(
+      'GET',
+      _url('/tasks/$taskId', {
+        'userId': '$userId',
+      }),
+    );
   }
 
   Future<EarnedReward> completeTask({required int taskId, required int actualCount}) async {
@@ -89,7 +126,7 @@ class TodayApi {
     required int targetCount,
     required int importance,
     required int difficulty,
-    required DateTime endTime,
+    DateTime? endTime,
     Map<String, dynamic>? recordRule,
   }) async {
     await _request('POST', _url('/tasks'), body: {
@@ -97,12 +134,40 @@ class TodayApi {
       'title': title,
       'note': note,
       'startTime': _localDateTime(DateTime.now()),
-      'endTime': _localDateTime(endTime),
+      if (endTime != null)
+        'endTime': _localDateTime(endTime),
       'targetCount': targetCount,
       'importance': importance,
       'difficulty': difficulty,
       if (recordRule != null) 'recordRule': recordRule,
     });
+  }
+
+  Future<void> updateTask({
+    required int taskId,
+    required String title,
+    required String note,
+    required int targetCount,
+    required int importance,
+    required int difficulty,
+    required DateTime endTime,
+    required Map<String, dynamic> recordRule,
+  }) async {
+    await _request(
+      'PUT',
+      _url('/tasks/$taskId', {
+        'userId': '$userId',
+      }),
+      body: {
+        'title': title,
+        'note': note,
+        'targetCount': targetCount,
+        'importance': importance,
+        'difficulty': difficulty,
+        'endTime': _localDateTime(endTime),
+        'recordRule': recordRule,
+      },
+    );
   }
 
   Future<void> createDailyHabit({required String name, required String note, required String startDate}) async {

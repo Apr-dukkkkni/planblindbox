@@ -18,6 +18,7 @@ import com.planblindbox.mapper.TaskRecordMapper;
 import com.planblindbox.mapper.UserAssetMapper;
 import com.planblindbox.service.HabitCheckInService;
 import com.planblindbox.service.impl.TodayServiceImpl;
+import com.planblindbox.util.BusinessTime;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -57,10 +58,26 @@ class TodayServiceTest {
     @Test
     void todayTaskProgressCompletedTodayAndOverdue() {
         givenUser();
-        LocalDate today = LocalDate.now();
-        Task partial = task(10, TaskStatus.IN_PROGRESS, today.minusDays(2).atStartOfDay());
-        partial.setEndTime(today.minusDays(1).atTime(23, 0));
-        Task finished = task(11, TaskStatus.COMPLETED, today.minusDays(2).atStartOfDay());
+        LocalDateTime now = LocalDateTime.now();
+        LocalDate today = BusinessTime.businessDate(now);
+
+        Task partial = task(
+                10,
+                TaskStatus.IN_PROGRESS,
+                today.minusDays(2).atStartOfDay()
+        );
+
+// 已逾期，但尚未经过下一次凌晨5点刷新
+        partial.setEndTime(now.minusMinutes(10));
+
+        Task finished = task(
+                11,
+                TaskStatus.COMPLETED,
+                today.minusDays(2).atStartOfDay()
+        );
+
+// 今天已经完成的任务
+        finished.setEndTime(now.plusHours(2));
         when(taskMapper.selectByUserId(1L)).thenReturn(List.of(partial, finished));
         when(habitMapper.selectByUserId(1L)).thenReturn(List.of());
 
@@ -94,7 +111,8 @@ class TodayServiceTest {
     @Test
     void excludeFutureCancelledArchivedAndPreviouslyCompleted() {
         givenUser();
-        LocalDate today = LocalDate.now();
+        LocalDate today =
+                BusinessTime.businessDate(LocalDateTime.now()); today = LocalDate.now();
         Task future = task(1, TaskStatus.PENDING, today.plusDays(1).atStartOfDay());
         Task oldCompleted = task(2, TaskStatus.COMPLETED, today.minusDays(1).atStartOfDay());
         Task cancelled = task(3, TaskStatus.CANCELLED, null);

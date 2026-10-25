@@ -24,16 +24,29 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class HabitServiceImpl implements HabitService {
+
     private final HabitMapper habitMapper;
     private final ObjectMapper objectMapper;
+
+    // ===========================
+    // 1. 创建习惯
+    // ===========================
 
     @Override
     @Transactional
     public HabitResponse create(HabitCreateRequest request) {
-        validateDates(request.getStartDate(), request.getEndDate());
-        String rule = validateAndSerializeRule(request.getRepeatRule());
+
+        validateDates(
+                request.getStartDate(),
+                request.getEndDate()
+        );
+
+        String rule = validateAndSerializeRule(
+                request.getRepeatRule()
+        );
 
         Habit habit = new Habit();
+
         habit.setUserId(request.getUserId());
         habit.setName(request.getName().trim());
         habit.setNote(request.getNote());
@@ -45,128 +58,330 @@ public class HabitServiceImpl implements HabitService {
         if (habitMapper.insert(habit) != 1) {
             throw new IllegalStateException("创建 Habit 失败");
         }
-        return toResponse(habitMapper.selectById(habit.getHabitId(), habit.getUserId()));
+
+        return toResponse(
+                habitMapper.selectById(
+                        habit.getHabitId(),
+                        habit.getUserId()
+                )
+        );
     }
+
+    // ===========================
+    // 2. 查询单个习惯
+    // ===========================
 
     @Override
     public HabitResponse getById(Long userId, Long habitId) {
-        return toResponse(getEntity(userId, habitId));
+
+        return toResponse(
+                getEntity(userId, habitId)
+        );
     }
+
+    // ===========================
+    // 3. 查询习惯列表
+    // ===========================
 
     @Override
     public List<HabitResponse> list(Long userId) {
-        return habitMapper.selectByUserId(userId).stream().map(this::toResponse).toList();
+
+        return habitMapper.selectByUserId(userId)
+                .stream()
+                .map(this::toResponse)
+                .toList();
     }
+
+    // ===========================
+    // 4. 修改习惯
+    // ===========================
 
     @Override
     @Transactional
-    public HabitResponse update(Long userId, Long habitId, HabitUpdateRequest request) {
+    public HabitResponse update(
+            Long userId,
+            Long habitId,
+            HabitUpdateRequest request
+    ) {
+
         Habit habit = getEntityForUpdate(userId, habitId);
+
         if (habit.getStatus() == HabitStatus.ARCHIVED) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "已归档习惯不能修改");
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "已归档习惯不能修改"
+            );
         }
+
         if (request.getStatus() == HabitStatus.ARCHIVED) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请通过 DELETE 接口归档习惯");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "请通过 DELETE 接口归档习惯"
+            );
         }
+
         if (request.getName() != null) {
+
             if (request.getName().isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "习惯名称不能为空");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "习惯名称不能为空"
+                );
             }
+
             habit.setName(request.getName().trim());
         }
-        if (request.getNote() != null) habit.setNote(request.getNote());
-        if (request.getStartDate() != null) habit.setStartDate(request.getStartDate());
-        if (request.getEndDate() != null) habit.setEndDate(request.getEndDate());
-        if (request.getRepeatRule() != null) habit.setRepeatRule(validateAndSerializeRule(request.getRepeatRule()));
-        if (request.getStatus() != null) habit.setStatus(request.getStatus());
-        validateDates(habit.getStartDate(), habit.getEndDate());
+
+        if (request.getNote() != null) {
+            habit.setNote(request.getNote());
+        }
+
+        if (request.getStartDate() != null) {
+            habit.setStartDate(request.getStartDate());
+        }
+
+        if (request.getEndDate() != null) {
+            habit.setEndDate(request.getEndDate());
+        }
+
+        if (request.getRepeatRule() != null) {
+            habit.setRepeatRule(
+                    validateAndSerializeRule(
+                            request.getRepeatRule()
+                    )
+            );
+        }
+
+        if (request.getStatus() != null) {
+            habit.setStatus(request.getStatus());
+        }
+
+        validateDates(
+                habit.getStartDate(),
+                habit.getEndDate()
+        );
 
         if (habitMapper.update(habit) != 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "习惯可能已被归档，请重新查询");
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "习惯可能已被归档，请重新查询"
+            );
         }
-        return toResponse(habitMapper.selectById(habitId, userId));
+
+        return toResponse(
+                habitMapper.selectById(habitId, userId)
+        );
     }
+
+    // ===========================
+    // 5. 归档习惯
+    // ===========================
 
     @Override
     @Transactional
     public void archive(Long userId, Long habitId) {
+
         Habit habit = getEntityForUpdate(userId, habitId);
+
         if (habit.getStatus() == HabitStatus.ARCHIVED) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "习惯已经归档");
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "习惯已经归档"
+            );
         }
+
         if (habitMapper.archive(habitId, userId) != 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "习惯已经归档");
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "习惯已经归档"
+            );
         }
     }
 
-    private Habit getEntityForUpdate(Long userId, Long habitId) {
-        Habit habit = habitMapper.selectByIdForUpdate(habitId, userId);
-        if (habit == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Habit不存在");
+    // ===========================
+    // 6. 查询实体（加行锁）
+    // ===========================
+
+    private Habit getEntityForUpdate(
+            Long userId,
+            Long habitId
+    ) {
+
+        Habit habit = habitMapper.selectByIdForUpdate(
+                habitId,
+                userId
+        );
+
+        if (habit == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Habit不存在"
+            );
+        }
+
         return habit;
     }
 
-    private Habit getEntity(Long userId, Long habitId) {
-        Habit habit = habitMapper.selectById(habitId, userId);
-        if (habit == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Habit不存在");
+    // ===========================
+    // 7. 查询实体
+    // ===========================
+
+    private Habit getEntity(
+            Long userId,
+            Long habitId
+    ) {
+
+        Habit habit = habitMapper.selectById(
+                habitId,
+                userId
+        );
+
+        if (habit == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Habit不存在"
+            );
+        }
+
         return habit;
     }
 
-    /** V0.1 周期格式固定下来，后续 Today/打卡功能可以直接复用。 */
+    // ===========================
+    // 8. 校验重复规则
+    // ===========================
+
     private String validateAndSerializeRule(JsonNode rule) {
-        if (rule == null || !rule.isObject() || !rule.has("type") || !rule.get("type").isTextual()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "repeatRule 必须包含 type");
+
+        if (rule == null
+                || !rule.isObject()
+                || !rule.has("type")
+                || !rule.get("type").isTextual()) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "repeatRule 必须包含 type"
+            );
         }
+
         String type = rule.get("type").asText();
+
         if ("DAILY".equals(type)) {
+
             if (rule.size() != 1) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "DAILY 规则只允许 type 字段");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "DAILY 规则只允许 type 字段"
+                );
             }
+
         } else if ("WEEKLY".equals(type)) {
+
             JsonNode days = rule.get("daysOfWeek");
-            if (rule.size() != 2 || days == null || !days.isArray() || days.isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "WEEKLY 必须提供非空 daysOfWeek 数组");
+
+            if (rule.size() != 2
+                    || days == null
+                    || !days.isArray()
+                    || days.isEmpty()) {
+
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "WEEKLY 必须提供非空 daysOfWeek 数组"
+                );
             }
+
             Set<Integer> unique = new HashSet<>();
+
             for (JsonNode day : days) {
-                if (!day.isIntegralNumber() || !day.canConvertToInt()
-                        || day.intValue() < 1 || day.intValue() > 7
+
+                if (!day.isIntegralNumber()
+                        || !day.canConvertToInt()
+                        || day.intValue() < 1
+                        || day.intValue() > 7
                         || !unique.add(day.intValue())) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "daysOfWeek 只能是不重复的 1~7（周一到周日）");
+
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "daysOfWeek 只能是不重复的 1~7（周一到周日）"
+                    );
                 }
             }
+
         } else {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "当前仅支持 DAILY、WEEKLY 两种 repeatRule 类型");
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "当前仅支持 DAILY、WEEKLY 两种 repeatRule 类型"
+            );
         }
+
         try {
             return objectMapper.writeValueAsString(rule);
+
         } catch (JsonProcessingException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "repeatRule 无法序列化", e);
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "repeatRule 无法序列化",
+                    e
+            );
         }
     }
 
-    private void validateDates(LocalDate start, LocalDate end) {
-        if (start == null || (end != null && end.isBefore(start))) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "startDate 必填，且 endDate 不能早于 startDate");
+    // ===========================
+    // 9. 校验日期
+    // ===========================
+
+    private void validateDates(
+            LocalDate start,
+            LocalDate end
+    ) {
+
+        if (start == null
+                || (end != null && end.isBefore(start))) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "startDate 必填，且 endDate 不能早于 startDate"
+            );
         }
     }
+
+    // ===========================
+    // 10. Entity 转 Response
+    // ===========================
 
     private HabitResponse toResponse(Habit habit) {
-        if (habit == null) throw new IllegalStateException("Habit 写入后未查询到记录");
+
+        if (habit == null) {
+            throw new IllegalStateException(
+                    "Habit 写入后未查询到记录"
+            );
+        }
+
         HabitResponse response = new HabitResponse();
+
         response.setHabitId(habit.getHabitId());
         response.setName(habit.getName());
         response.setNote(habit.getNote());
         response.setStartDate(habit.getStartDate());
         response.setEndDate(habit.getEndDate());
         response.setStatus(habit.getStatus());
+
         try {
-            response.setRepeatRule(objectMapper.readTree(habit.getRepeatRule()));
+            response.setRepeatRule(
+                    objectMapper.readTree(
+                            habit.getRepeatRule()
+                    )
+            );
+
         } catch (JsonProcessingException e) {
-            throw new IllegalStateException("数据库 repeat_rule 不是合法 JSON", e);
+
+            throw new IllegalStateException(
+                    "数据库 repeat_rule 不是合法 JSON",
+                    e
+            );
         }
+
         return response;
     }
 }

@@ -165,17 +165,33 @@ class AssetStrip extends StatelessWidget {
 
 class TaskTile extends StatefulWidget {
   //任务卡片
+  //满足下面任意一条就放：
+  //
+  // 1. **渲染 UI 要用到**
+  // 比如：是否置顶标签、优先级文字、截止时间、打卡次数、任务颜色、图标。
+  //
+  // >
+  // > 例子：你后面想展示「记录方式：默认 / 固定 / 手动」，就加 `final String recordMode;`
+  //
+  // 2. **点击交互回调，由外层处理**
+  // 卡片里有新按钮（删除、延期、分享），点击逻辑不在 TaskTile 内部写，交给上层 `today_page` 处理
+  // 3. **状态锁、标记位**
+  // 控制交互可用性：是否加载中、是否已完成、是否只读。。
   const TaskTile({
+    //1. 对象在编译的时候就确定，运行时不再变，内存只创建一份，复用实例。
+    // 2. 要求：类里所有成员都必须是 `final`，构造参数全部是常量。
     super.key,
     required this.task,
     required this.todayDate,
     required this.busy,
-    required this.onComplete
+    required this.onComplete,
+    required this.onEdit,
   });
 
   final TodayTask task;       // 单条任务实体
   final String todayDate;     // 今天日期，用来判断逾期是否是今天逾期
   final bool busy;            // 忙标记：接口请求中，防止重复点击
+  final VoidCallback onEdit;
   final VoidCallback onComplete; // 点击完成的回调（提交给后端）
 
   @override
@@ -283,14 +299,61 @@ class _TaskTileState extends State<TaskTile> {
       if (isExpanded) ...[
         const SizedBox(height: 16),
         const Divider(),
-        Text(
-          '任务说明：${task.note ?? '暂无备注'}',
-          style: const TextStyle(color: AppColors.muted, fontSize: 12),
-        ),
         const SizedBox(height: 8),
-        Text(
-          '累计进度：${task.totalActualCount}/${task.targetCount}',
-          style: const TextStyle(color: AppColors.muted, fontSize: 12),
+
+        Material(
+          color: AppColors.paleGreen,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: busy ? null : widget.onEdit,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '任务详情',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.edit_outlined, size: 17),
+                      SizedBox(width: 5),
+                      Text(
+                        '点击编辑',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  Text(
+                    '任务说明：${task.note ?? '暂无备注'}',
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Text(
+                    '累计进度：${task.totalActualCount}/${task.targetCount}',
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ],
 
