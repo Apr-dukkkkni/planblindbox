@@ -10,5 +10,10 @@ public record ShopOpenResponse(
         long rewardAmount,
         int coinBalance,
         long expBalance,
-        int waterBalance
+        int waterBalance,
+        Long itemId,
+        String itemName,
+        String itemRarity,
+        String itemImagePath,
+        String itemDescription
 ) {}

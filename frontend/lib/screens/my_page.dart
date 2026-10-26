@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/today_api.dart';
 import '../models/today_models.dart';
+import 'collection_page.dart';
 
 /// 「我的」一级页面。
 /// 资产来自现有 /today 接口；等级与收藏系统在后续版本接入。
@@ -165,7 +166,7 @@ class _MyPageState extends State<MyPage> {
               iconColor: _forest,
               title: '我的收藏',
               subtitle: '蝴蝶图鉴与未来主题系列',
-              trailingLabel: '即将开放',
+              trailingLabel: '查看图鉴',
               onTap: _openCollectionPreview,
             ),
             const SizedBox(height: 10),
@@ -438,59 +439,8 @@ class _MyPageState extends State<MyPage> {
   void _openCollectionPreview() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => const _CollectionPreviewPage(),
+        builder: (_) => CollectionPage(api: widget.api),
       ),
     );
   }
-}
-
-class _CollectionPreviewPage extends StatelessWidget {
-  const _CollectionPreviewPage();
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: const Color(0xFFF6F8F5),
-        appBar: AppBar(
-          title: const Text('我的收藏'),
-          backgroundColor: const Color(0xFFF6F8F5),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 88,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE6EEE7),
-                    borderRadius: BorderRadius.circular(28),
-                  ),
-                  child: const Icon(
-                    Icons.collections_bookmark_outlined,
-                    size: 42,
-                    color: Color(0xFF315C48),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  '收藏图鉴即将开放',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  '下一阶段将接入蝴蝶盲盒与通用收藏系统。获得的收藏品会记录在用户库存中，并支持查看系列收集进度。当前版本尚未保存或展示真实收藏数据。',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFF78857B),
-                    fontSize: 13,
-                    height: 1.6,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
 }

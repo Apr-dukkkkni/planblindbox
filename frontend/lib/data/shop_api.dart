@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'today_api.dart';
 
-
+/// 与后端 ShopController 的 Result<T> 格式对应。
 class ShopApi {
   ShopApi({required this.baseUrl, required this.userId, http.Client? client})
       : _client = client ?? http.Client();
@@ -117,6 +117,12 @@ int _integer(dynamic value) {
   throw ApiException('服务器返回的数字字段格式错误');
 }
 
+int? _nullableInteger(dynamic value) {
+  if (value is num) return value.toInt();
+  if (value == null) return null;
+  return int.tryParse(value.toString());
+}
+
 class ShopBox {
   const ShopBox({
     required this.id,
@@ -166,6 +172,11 @@ class ShopOpen {
     required this.rewardType,
     required this.rewardAmount,
     required this.balance,
+    this.itemId,
+    this.itemName,
+    this.itemRarity,
+    this.itemImagePath,
+    this.itemDescription,
   });
 
   final int openId;
@@ -176,6 +187,13 @@ class ShopOpen {
   final String rewardType;
   final int rewardAmount;
   final ShopBalance balance;
+
+  // COLLECTIBLE 奖励由后端附带收藏品详情；数值奖励时这些字段为空。
+  final int? itemId;
+  final String? itemName;
+  final String? itemRarity;
+  final String? itemImagePath;
+  final String? itemDescription;
 
   factory ShopOpen.fromJson(Map<String, dynamic> json) => ShopOpen(
         openId: _integer(json['openId']),
@@ -190,6 +208,11 @@ class ShopOpen {
           exp: _integer(json['expBalance']),
           water: _integer(json['waterBalance']),
         ),
+        itemId: _nullableInteger(json['itemId']),
+        itemName: json['itemName']?.toString(),
+        itemRarity: json['itemRarity']?.toString(),
+        itemImagePath: json['itemImagePath']?.toString(),
+        itemDescription: json['itemDescription']?.toString(),
       );
 }
 

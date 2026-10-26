@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/shop_api.dart';
+import '../data/collection_api.dart';
 import '../data/today_api.dart';
 import '../theme/app_theme.dart';
 import '../widgets/dashboard_cards.dart';
@@ -22,6 +23,7 @@ class StorePage extends StatefulWidget {
 
 class _StorePageState extends State<StorePage> {
   late ShopApi _shopApi;
+  late CollectionApi _collectionApi;
   List<ShopBox> _boxes = [];
   List<ShopOpen> _history = [];
   ShopBalance? _balance;
@@ -40,6 +42,8 @@ class _StorePageState extends State<StorePage> {
   void initState() {
     super.initState();
     _shopApi = ShopApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
+    _collectionApi =
+        CollectionApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
     _load();
   }
 
@@ -48,7 +52,10 @@ class _StorePageState extends State<StorePage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api) {
       _shopApi.dispose();
+      _collectionApi.dispose();
       _shopApi = ShopApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
+      _collectionApi =
+          CollectionApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
       _pendingRequestId = null;
       _pendingBoxId = null;
       _load();
@@ -60,6 +67,7 @@ class _StorePageState extends State<StorePage> {
   @override
   void dispose() {
     _shopApi.dispose();
+    _collectionApi.dispose();
     super.dispose();
   }
 
@@ -200,6 +208,208 @@ class _StorePageState extends State<StorePage> {
   }
 
   Future<void> _showReward(ShopOpen result) async {
+    if (result.rewardType == 'COLLECTIBLE' && result.itemName != null) {
+      // 查询发奖后的真实库存，用于区分首次解锁和重复获得。
+      // 查询失败不影响已成功的开盒，只降级显示通用收藏提示。
+      final ownedCount = await _getOwnedCountAfter(result)
+          .timeout(const Duration(seconds: 3), onTimeout: () => null);
+      if (!mounted) return;
+
+      final isDuplicate =
+          ownedCount != null && ownedCount > result.rewardAmount;
+      final imagePath = result.itemImagePath;
+      final imageUrl = imagePath == null || imagePath.isEmpty
+          ? null
+          : Uri.parse(_shopApi.baseUrl).resolve(imagePath).toString();
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) => Dialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 66,
+                    height: 66,
+                    decoration: BoxDecoration(
+                      color: isDuplicate
+                          ? const Color(0xFFFFF2D7)
+                          : AppColors.paleGreen,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      isDuplicate
+                          ? Icons.collections_bookmark_rounded
+                          : Icons.auto_awesome_rounded,
+                      color: isDuplicate
+                          ? const Color(0xFFB07B27)
+                          : AppColors.forest,
+                      size: 34,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    ownedCount == null
+                        ? '收藏品获得成功！'
+                        : isDuplicate
+                            ? '重复获得！'
+                            : '新收藏解锁！',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 15),
+                  if (imageUrl != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(18),
+                      child: SizedBox(
+                        width: 190,
+                        height: 190,
+                        child: Image.network(
+                          imageUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            color: AppColors.paleGreen,
+                            child: const Icon(
+                              Icons.image_not_supported_outlined,
+                              color: AppColors.forest,
+                              size: 44,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      width: 150,
+                      height: 150,
+                      decoration: BoxDecoration(
+                        color: AppColors.paleGreen,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: const Icon(
+                        Icons.collections_bookmark_outlined,
+                        color: AppColors.forest,
+                        size: 48,
+                      ),
+                    ),
+                  const SizedBox(height: 14),
+                  Text(
+                    result.itemName!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  if (result.itemRarity != null &&
+                      result.itemRarity!.isNotEmpty) ...[
+                    const SizedBox(height: 7),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 11, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: _rarityColor(result.itemRarity!).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        _rarityLabel(result.itemRarity!),
+                        style: TextStyle(
+                          color: _rarityColor(result.itemRarity!),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (result.itemDescription != null &&
+                      result.itemDescription!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      result.itemDescription!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                        height: 1.5,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 13),
+                  if (ownedCount != null)
+                    Text(
+                      isDuplicate
+                          ? '重复获得 · 当前拥有 $ownedCount 份'
+                          : '已加入我的收藏 · 当前拥有 $ownedCount 份',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: AppColors.forest,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    )
+                  else
+                    const Text(
+                      '奖励已入库，可前往「我的收藏」查看。',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: AppColors.forest,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  const SizedBox(height: 14),
+                  const Divider(height: 1),
+                  const SizedBox(height: 11),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('本次消耗',
+                          style: TextStyle(color: AppColors.muted)),
+                      Text('${result.priceCoin} 金币',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                  const SizedBox(height: 7),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('剩余金币',
+                          style: TextStyle(color: AppColors.muted)),
+                      Text('${result.balance.coin}',
+                          style: const TextStyle(
+                            color: AppColors.forest,
+                            fontWeight: FontWeight.w900,
+                          )),
+                    ],
+                  ),
+                  const SizedBox(height: 17),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('收下奖励'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -231,6 +441,51 @@ class _StorePageState extends State<StorePage> {
         ],
       ),
     );
+  }
+
+  Future<int?> _getOwnedCountAfter(ShopOpen result) async {
+    final itemId = result.itemId;
+    if (itemId == null) return null;
+    try {
+      final packs = await _collectionApi.getPacks();
+      for (final pack in packs) {
+        final items = await _collectionApi.getItems(pack.id);
+        for (final item in items) {
+          if (item.id == itemId) return item.ownedCount;
+        }
+      }
+    } catch (_) {
+      // 开盒已经成功，库存查询失败不能把成功结果变成失败。
+    }
+    return null;
+  }
+
+  Color _rarityColor(String rarity) {
+    switch (rarity.toUpperCase()) {
+      case 'RARE':
+        return const Color(0xFF4386C6);
+      case 'EPIC':
+        return const Color(0xFF8974B5);
+      case 'LEGENDARY':
+        return const Color(0xFFC29442);
+      default:
+        return AppColors.forest;
+    }
+  }
+
+  String _rarityLabel(String rarity) {
+    switch (rarity.toUpperCase()) {
+      case 'RARE':
+        return '稀有';
+      case 'EPIC':
+        return '史诗';
+      case 'LEGENDARY':
+        return '传说';
+      case 'UNCOMMON':
+        return '优秀';
+      default:
+        return '普通';
+    }
   }
 
   void _showMessage(String message) {
@@ -327,9 +582,16 @@ class _StorePageState extends State<StorePage> {
                       children: [
                         Text(item.boxName,
                             style: const TextStyle(fontWeight: FontWeight.w700)),
-                        Text('获得 +${item.rewardAmount} ${_assetLabel(item.rewardType)}',
-                            style: const TextStyle(
-                                color: AppColors.muted, fontSize: 12)),
+                        Text(
+                          item.rewardType == 'COLLECTIBLE' &&
+                                  item.itemName != null
+                              ? '收藏品：${item.itemName} · ${_rarityLabel(item.itemRarity ?? '')}'
+                              : '获得 +${item.rewardAmount} ${_assetLabel(item.rewardType)}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: AppColors.muted, fontSize: 12),
+                        ),
                       ],
                     ),
                   ),

@@ -10,6 +10,7 @@ import com.planblindbox.entity.ShopReward;
 import com.planblindbox.entity.UserAsset;
 import com.planblindbox.mapper.AppUserMapper;
 import com.planblindbox.mapper.AssetRecordMapper;
+import com.planblindbox.mapper.CollectibleMapper;
 import com.planblindbox.mapper.ShopMapper;
 import com.planblindbox.mapper.UserAssetMapper;
 import java.util.List;
@@ -22,7 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-/** 商店：购买 / 扣款 / 发奖 / 流水 / 开盒记录，全部在一个数据库事务内完成。 */
+/** 商店：扣款、数值奖励/收藏品发放、流水及开盒记录在同一个事务中完成。 */
 @Service
 @RequiredArgsConstructor
 public class ShopService {
@@ -31,6 +32,7 @@ public class ShopService {
     private final AppUserMapper appUserMapper;
     private final UserAssetMapper userAssetMapper;
     private final AssetRecordMapper assetRecordMapper;
+    private final CollectibleMapper collectibleMapper;
 
     @Transactional(readOnly = true)
     public List<ShopBoxResponse> boxes() {
@@ -64,7 +66,6 @@ public class ShopService {
         if (boxId == null || boxId <= 0 || requestId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "boxId/requestId 不合法");
         }
-        // 统一 UUID 表示，避免一笔请求不同大小写被当作两笔开盒。
         final String normalized;
         try {
             normalized = UUID.fromString(requestId).toString();
@@ -75,7 +76,7 @@ public class ShopService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "requestId 必须是标准 UUID 格式");
         }
 
-        // 已提交过的同一请求直接返回第一次的结果，不重复扣款或重新抽奖。
+        // 同一 requestId 重试时返回第一次的结果，不重复扣款或发奖。
         ShopOpenRecord existing = shopMapper.selectByRequestId(userId, normalized);
         if (existing != null) {
             if (!boxId.equals(existing.getBoxId())) {
@@ -95,14 +96,20 @@ public class ShopService {
         }
 
         ShopReward reward = pickReward(shopMapper.selectActiveRewards(boxId));
-        // 先用 UNIQUE(user_id, request_id) 占住请求，再执行扣款。
-        // 两个同时发起、且 requestId 相同的请求：只有一个能通过插入。
+
+        // 先写入幂等开盒记录。后续任何一步失败，事务会一起回滚。
         ShopOpenRecord record = new ShopOpenRecord();
         record.setUserId(userId);
         record.setBoxId(boxId);
         record.setBoxName(box.getName());
         record.setRequestId(normalized);
         record.setRewardId(reward.getRewardId());
+        record.setCollectibleItemId("COLLECTIBLE".equals(reward.getAssetType())
+                ? reward.getItemId() : null);
+        record.setItemName(reward.getItemName());
+        record.setItemRarity(reward.getItemRarity());
+        record.setItemImagePath(reward.getItemImagePath());
+        record.setItemDescription(reward.getItemDescription());
         record.setPriceCoin(price);
         record.setRewardType(reward.getAssetType());
         record.setRewardAmount(reward.getAmount());
@@ -111,7 +118,6 @@ public class ShopService {
                 throw new IllegalStateException("创建开盒记录失败");
             }
         } catch (DuplicateKeyException exception) {
-            // 并发重复请求不扣款。第一次请求的响应可通过 GET /shop/opens 查询。
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "本次开盒请求已被处理，请刷新开盒记录", exception);
         }
@@ -121,20 +127,16 @@ public class ShopService {
         }
         addLedger(userId, "SHOP_OPEN_COST", "COIN", -price.longValue(), record.getOpenId());
 
-        int coinReward = 0;
-        long expReward = 0;
-        int waterReward = 0;
         switch (reward.getAssetType()) {
-            case "COIN" -> coinReward = Math.toIntExact(reward.getAmount());
-            case "EXP" -> expReward = reward.getAmount();
-            case "WATER" -> waterReward = Math.toIntExact(reward.getAmount());
+            case "COIN" -> grantAssetReward(userId, reward, record.getOpenId(),
+                    Math.toIntExact(reward.getAmount()), 0L, 0);
+            case "EXP" -> grantAssetReward(userId, reward, record.getOpenId(),
+                    0, reward.getAmount(), 0);
+            case "WATER" -> grantAssetReward(userId, reward, record.getOpenId(),
+                    0, 0L, Math.toIntExact(reward.getAmount()));
+            case "COLLECTIBLE" -> grantCollectible(userId, reward, record.getOpenId());
             default -> throw new IllegalStateException("奖励类型配置异常");
         }
-        if (userAssetMapper.addAssets(userId, coinReward, expReward, waterReward) < 1) {
-            throw new IllegalStateException("开盒奖励入账失败");
-        }
-        addLedger(userId, "SHOP_OPEN_REWARD", reward.getAssetType(),
-                reward.getAmount(), record.getOpenId());
 
         UserAsset balance = userAssetMapper.selectByUserId(userId);
         if (balance == null || balance.getCoin() == null || balance.getExp() == null
@@ -150,27 +152,67 @@ public class ShopService {
         return toResponse(record);
     }
 
+    private void grantAssetReward(Long userId, ShopReward reward, Long openId,
+                                  int coin, long exp, int water) {
+        if (userAssetMapper.addAssets(userId, coin, exp, water) < 1) {
+            throw new IllegalStateException("开盒奖励入账失败");
+        }
+        addLedger(userId, "SHOP_OPEN_REWARD", reward.getAssetType(),
+                reward.getAmount(), openId);
+    }
+
+    private void grantCollectible(Long userId, ShopReward reward, Long openId) {
+        int quantity = Math.toIntExact(reward.getAmount());
+        if (collectibleMapper.addToInventory(userId, reward.getItemId(), quantity) < 1) {
+            throw new IllegalStateException("收藏品库存更新失败");
+        }
+        if (collectibleMapper.insertAcquisitionRecord(
+                userId, reward.getItemId(), quantity, "SHOP_BOX", openId) != 1) {
+            throw new IllegalStateException("收藏品获取流水写入失败");
+        }
+    }
+
     private ShopReward pickReward(List<ShopReward> rewards) {
         if (rewards == null || rewards.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "盲盒尚未配置可用奖励");
         }
         long weightSum = 0;
-        for (ShopReward r : rewards) {
-            if (r.getRewardId() == null || r.getAmount() == null || r.getAmount() <= 0
-                    || r.getWeight() == null || r.getWeight() <= 0
-                    || !("COIN".equals(r.getAssetType()) || "EXP".equals(r.getAssetType())
-                        || "WATER".equals(r.getAssetType()))) {
+        for (ShopReward reward : rewards) {
+            if (reward.getRewardId() == null || reward.getAmount() == null
+                    || reward.getAmount() <= 0 || reward.getWeight() == null
+                    || reward.getWeight() <= 0) {
                 throw new IllegalStateException("商店奖励池配置异常");
             }
-            if (!"EXP".equals(r.getAssetType()) && r.getAmount() > Integer.MAX_VALUE) {
-                throw new IllegalStateException("COIN/WATER 奖励超出整数范围");
+            switch (reward.getAssetType() == null ? "" : reward.getAssetType()) {
+                case "COIN", "WATER" -> {
+                    if (reward.getItemId() != null || reward.getAmount() > Integer.MAX_VALUE) {
+                        throw new IllegalStateException("COIN/WATER 奖励配置异常");
+                    }
+                }
+                case "EXP" -> {
+                    if (reward.getItemId() != null) {
+                        throw new IllegalStateException("EXP 奖励不能关联收藏品");
+                    }
+                }
+                case "COLLECTIBLE" -> {
+                    if (reward.getItemId() == null
+                            || !Boolean.TRUE.equals(reward.getItemEnabled())
+                            || !"PUBLISHED".equals(reward.getPackStatus())
+                            || reward.getItemName() == null || reward.getItemName().isBlank()
+                            || reward.getItemRarity() == null || reward.getItemRarity().isBlank()
+                            || reward.getItemImagePath() == null || reward.getItemImagePath().isBlank()
+                            || reward.getAmount() > Integer.MAX_VALUE) {
+                        throw new IllegalStateException("收藏品奖励配置异常：请检查收藏品、图片和内容包发布状态");
+                    }
+                }
+                default -> throw new IllegalStateException("奖励类型配置异常");
             }
-            weightSum = Math.addExact(weightSum, r.getWeight().longValue());
+            weightSum = Math.addExact(weightSum, reward.getWeight().longValue());
         }
         long ticket = ThreadLocalRandom.current().nextLong(weightSum);
-        for (ShopReward r : rewards) {
-            ticket -= r.getWeight();
-            if (ticket < 0) return r;
+        for (ShopReward reward : rewards) {
+            ticket -= reward.getWeight();
+            if (ticket < 0) return reward;
         }
         throw new IllegalStateException("随机奖励选择失败");
     }
@@ -207,6 +249,8 @@ public class ShopService {
                 record.getBoxId(), record.getBoxName(), record.getPriceCoin(),
                 record.getRewardType(), record.getRewardAmount(),
                 record.getCoinBalanceAfter(), record.getExpBalanceAfter(),
-                record.getWaterBalanceAfter());
+                record.getWaterBalanceAfter(), record.getCollectibleItemId(),
+                record.getItemName(), record.getItemRarity(), record.getItemImagePath(),
+                record.getItemDescription());
     }
 }

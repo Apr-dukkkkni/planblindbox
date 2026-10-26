@@ -18,20 +18,45 @@ public interface ShopMapper {
     @Select("SELECT box_id, code, name, description, price_coin, enabled FROM shop_box WHERE box_id = #{boxId} AND enabled = 1")
     ShopBox selectEnabledBox(@Param("boxId") Long boxId);
 
-    @Select("SELECT reward_id, box_id, asset_type, amount, weight FROM shop_reward WHERE box_id = #{boxId} AND enabled = 1 ORDER BY reward_id")
+    @Select("""
+            SELECT r.reward_id, r.box_id, r.asset_type, r.amount, r.weight, r.item_id,
+                   i.name AS item_name,
+                   i.rarity AS item_rarity,
+                   i.description AS item_description,
+                   i.image_path AS item_image_path,
+                   i.enabled AS item_enabled,
+                   p.status AS pack_status
+            FROM shop_reward r
+            LEFT JOIN collectible_item i ON i.item_id = r.item_id
+            LEFT JOIN content_pack p ON p.pack_id = i.pack_id
+            WHERE r.box_id = #{boxId} AND r.enabled = 1
+            ORDER BY r.reward_id
+            """)
     List<ShopReward> selectActiveRewards(@Param("boxId") Long boxId);
 
     @Select("""
-            SELECT r.*, b.name AS box_name FROM shop_open_record r
+            SELECT r.*, b.name AS box_name,
+                   i.name AS item_name,
+                   i.rarity AS item_rarity,
+                   i.description AS item_description,
+                   i.image_path AS item_image_path
+            FROM shop_open_record r
             JOIN shop_box b ON b.box_id = r.box_id
+            LEFT JOIN collectible_item i ON i.item_id = r.collectible_item_id
             WHERE r.user_id = #{userId} AND r.request_id = #{requestId}
             """)
     ShopOpenRecord selectByRequestId(@Param("userId") Long userId,
                                      @Param("requestId") String requestId);
 
     @Select("""
-            SELECT r.*, b.name AS box_name FROM shop_open_record r
+            SELECT r.*, b.name AS box_name,
+                   i.name AS item_name,
+                   i.rarity AS item_rarity,
+                   i.description AS item_description,
+                   i.image_path AS item_image_path
+            FROM shop_open_record r
             JOIN shop_box b ON b.box_id = r.box_id
+            LEFT JOIN collectible_item i ON i.item_id = r.collectible_item_id
             WHERE r.user_id = #{userId}
             ORDER BY r.open_id DESC LIMIT #{limit}
             """)
@@ -40,9 +65,11 @@ public interface ShopMapper {
 
     @Insert("""
             INSERT INTO shop_open_record (
-                user_id, box_id, request_id, reward_id, price_coin, reward_type, reward_amount
+                user_id, box_id, request_id, reward_id, collectible_item_id,
+                price_coin, reward_type, reward_amount
             ) VALUES (
-                #{userId}, #{boxId}, #{requestId}, #{rewardId}, #{priceCoin}, #{rewardType}, #{rewardAmount}
+                #{userId}, #{boxId}, #{requestId}, #{rewardId}, #{collectibleItemId},
+                #{priceCoin}, #{rewardType}, #{rewardAmount}
             )
             """)
     @Options(useGeneratedKeys = true, keyProperty = "openId", keyColumn = "open_id")

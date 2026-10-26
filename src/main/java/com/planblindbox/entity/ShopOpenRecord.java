@@ -11,6 +11,7 @@ public class ShopOpenRecord {
     private String boxName;
     private String requestId;
     private Long rewardId;
+    private Long collectibleItemId;
     private Integer priceCoin;
     private String rewardType;
     private Long rewardAmount;
@@ -18,4 +19,10 @@ public class ShopOpenRecord {
     private Long expBalanceAfter;
     private Integer waterBalanceAfter;
     private LocalDateTime createdAt;
+
+    // 查询历史记录时由 collectible_item 联表填充；数值奖励时为空。
+    private String itemName;
+    private String itemRarity;
+    private String itemImagePath;
+    private String itemDescription;
 }
