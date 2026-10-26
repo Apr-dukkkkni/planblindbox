@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'today_api.dart';
 
-/// 与后端 ShopController 的 Result<T> 格式对应。
+
 class ShopApi {
   ShopApi({required this.baseUrl, required this.userId, http.Client? client})
       : _client = client ?? http.Client();

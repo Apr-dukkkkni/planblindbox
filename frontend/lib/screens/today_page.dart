@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import '../widgets/dashboard_cards.dart';
 import 'dart:math';
 import 'task_library_page.dart';
+import 'habit_management_page.dart';
 
 class TodayPage extends StatefulWidget {
   const TodayPage({super.key, required this.api});
@@ -180,6 +181,53 @@ class _TodayPageState extends State<TodayPage> {
     }
   }
 
+
+  Future<void> _openHabitManagement() async {
+    final businessDate = _data?.date;
+
+    if (businessDate == null) {
+      _message('今日数据尚未加载，请刷新后重试', error: true);
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => HabitManagementPage(
+          api: widget.api,
+          businessDate: businessDate,
+        ),
+      ),
+    );
+
+    if (mounted) {
+      await _load();
+    }
+  }
+
+  Future<void> _openHabitCreate() async {
+    final businessDate = _data?.date;
+
+    if (businessDate == null) {
+      _message('今日数据尚未加载', error: true);
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => HabitManagementPage(
+          api: widget.api,
+          businessDate: businessDate,
+          autoCreate: true,
+        ),
+      ),
+    );
+
+    if (mounted) {
+      await _load();
+    }
+  }
+
+
   void _message(String message, {bool error = false}) {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -257,7 +305,15 @@ class _TodayPageState extends State<TodayPage> {
                 const SizedBox(height: 18),
                 SectionHeading(title: '每日习惯',
                     subtitle: '持续行动，比偶尔冲刺更重要',
-                    actionLabel: '新建习惯', onAction: _createHabit),
+                    actionLabel: '新建习惯', onAction: _openHabitCreate),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _openHabitManagement,
+                    icon: const Icon(Icons.settings_outlined),
+                    label: const Text('管理习惯'),
+                  ),
+                ),
                 const SizedBox(height: 13),
                 if (data.habits.isEmpty)
                   const EmptySection(message: '今天没有计划打卡的习惯', icon: Icons.spa_outlined)

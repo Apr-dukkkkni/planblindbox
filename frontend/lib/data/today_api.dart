@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/today_models.dart';
 
+
 class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
   final String message;
