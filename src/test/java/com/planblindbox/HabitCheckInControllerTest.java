@@ -3,6 +3,7 @@ package com.planblindbox;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.planblindbox.dto.request.HabitCreateRequest;
 import com.planblindbox.service.HabitService;
+import com.planblindbox.util.BusinessTime;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -14,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.PreparedStatement;
 import java.sql.Statement;
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -43,7 +44,7 @@ class HabitCheckInControllerTest {
         HabitCreateRequest req = new HabitCreateRequest();
         req.setUserId(userId);
         req.setName("HTTP 打卡测试");
-        req.setStartDate(LocalDate.now());
+        req.setStartDate(BusinessTime.businessDate(LocalDateTime.now()));
         req.setRepeatRule(mapper.readTree("{\"type\":\"DAILY\"}"));
         long habitId = habits.create(req).getHabitId();
 

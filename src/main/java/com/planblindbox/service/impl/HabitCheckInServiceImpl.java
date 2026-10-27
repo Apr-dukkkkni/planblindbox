@@ -13,6 +13,7 @@ import com.planblindbox.mapper.HabitMapper;
 import com.planblindbox.mapper.HabitRecordMapper;
 import com.planblindbox.service.HabitCheckInService;
 import com.planblindbox.service.RewardService;
+import com.planblindbox.util.BusinessTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -42,7 +43,8 @@ public class HabitCheckInServiceImpl implements HabitCheckInService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "仅 ACTIVE 习惯可打卡");
         }
 
-        LocalDate today = LocalDate.now();
+        LocalDateTime now = LocalDateTime.now();
+        LocalDate today = BusinessTime.businessDate(now);
         JsonNode rule = parseRule(habit);
         if (!isScheduled(habit, today, rule)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "今天不是此习惯的执行日");
@@ -56,7 +58,7 @@ public class HabitCheckInServiceImpl implements HabitCheckInService {
         record.setRecordDate(today);
         record.setStatus(HabitRecordStatus.COMPLETED);
         record.setActualCount(1);
-        record.setFinishTime(LocalDateTime.now());
+        record.setFinishTime(now);
         if (habitRecordMapper.insert(record) != 1) {
             throw new IllegalStateException("保存习惯打卡记录失败");
         }
@@ -71,7 +73,7 @@ public class HabitCheckInServiceImpl implements HabitCheckInService {
     public HabitCheckInResponse getTodayStatus(Long userId, Long habitId) {
         Habit habit = habitMapper.selectById(habitId, userId);
         if (habit == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Habit不存在");
-        return buildStatus(habit, LocalDate.now());
+        return buildStatus(habit, BusinessTime.businessDate(LocalDateTime.now()));
     }
 
     private HabitCheckInResponse buildStatus(Habit habit, LocalDate today) {

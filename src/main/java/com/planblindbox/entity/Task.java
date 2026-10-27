@@ -23,6 +23,8 @@ public class Task {
 
     private Integer targetCount;
 
+    private Long categoryId;
+
     /**
      * 任务记录规则，保存数据库中的 JSON 原文。
      * NULL 表示 DEFAULT 模式，每次记录 1。

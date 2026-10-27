@@ -61,19 +61,20 @@ class TodayServiceTest {
         LocalDateTime now = LocalDateTime.now();
         LocalDate today = BusinessTime.businessDate(now);
 
+// 当天业务周期开始于 05:00
+        LocalDateTime businessDayStart = today.atTime(5, 0);
+
+// 两个任务都在当前业务日开始
         Task partial = task(
                 10,
                 TaskStatus.IN_PROGRESS,
-                today.minusDays(2).atStartOfDay()
+                businessDayStart
         );
-
-// 已逾期，但尚未经过下一次凌晨5点刷新
-        partial.setEndTime(now.minusMinutes(10));
 
         Task finished = task(
                 11,
                 TaskStatus.COMPLETED,
-                today.minusDays(2).atStartOfDay()
+                businessDayStart
         );
 
 // 今天已经完成的任务
@@ -95,7 +96,12 @@ class TodayServiceTest {
         assertEquals(30, a.getTodayActualCount());
         assertEquals(70L, a.getTotalActualCount());
         assertEquals(30L, a.getRemainingCount());
-        assertTrue(a.isOverdue());
+        assertFalse(a.isOverdue());
+        // 验证截止时间为下一个凌晨 5 点
+        assertEquals(
+                BusinessTime.nextReset(businessDayStart),
+                a.getEndTime()
+        );
         assertFalse(a.isCompletedToday());
         var b = response.getTasks().get(1);
         assertTrue(b.isCompletedToday());

@@ -14,6 +14,8 @@ import com.planblindbox.entity.TaskRecord;
 import com.planblindbox.enums.TaskRecordStatus;
 import com.planblindbox.enums.TaskStatus;
 import com.planblindbox.mapper.TaskMapper;
+import com.planblindbox.mapper.TaskCategoryMapper;
+import com.planblindbox.entity.TaskCategory;
 import com.planblindbox.mapper.TaskRecordMapper;
 import com.planblindbox.service.TaskService;
 import com.planblindbox.service.RewardService;
@@ -33,6 +35,7 @@ import java.util.List;
 public class TaskServiceImpl implements TaskService {
 
     private final TaskMapper taskMapper;
+    private final TaskCategoryMapper taskCategoryMapper;
     private final TaskRecordMapper taskRecordMapper;
     private final RewardService rewardService;
     private final ObjectMapper objectMapper;
@@ -48,10 +51,11 @@ public class TaskServiceImpl implements TaskService {
                         ? request.getStartTime()
                         : now;
 
-        LocalDateTime effectiveEnd =
-                request.getEndTime() != null
-                        ? request.getEndTime()
-                        : BusinessTime.nextReset(effectiveStart);
+        // 未指定截止时间时，默认截止于开始时间之后的下一个业务日切换点（凌晨 5 点）。
+        // 如果用户明确设置了截止时间（例如长期任务），则保留用户指定的时间。
+        LocalDateTime effectiveEnd = request.getEndTime() != null
+                ? request.getEndTime()
+                : BusinessTime.nextReset(effectiveStart);
 
         checkTime(effectiveStart, effectiveEnd);
 
@@ -69,8 +73,8 @@ public class TaskServiceImpl implements TaskService {
         task.setNote(request.getNote());
         task.setStartTime(effectiveStart);
         task.setEndTime(effectiveEnd);
-        task.setEndTime(effectiveEnd);
         task.setTargetCount(request.getTargetCount());
+        task.setCategoryId(resolveCategoryId(request.getUserId(), request.getCategoryId()));
         task.setRecordRule(
                 validateAndSerializeRecordRule(request.getRecordRule())
         );
@@ -246,12 +250,25 @@ public class TaskServiceImpl implements TaskService {
             task.setStartTime(request.getStartTime());
         }
 
+        // 只有请求明确传入截止时间时才覆盖；未传入时保留数据库中的原截止时间。
+        // 仅对历史数据中截止时间缺失的任务补上默认业务日截止点。
         if (request.getEndTime() != null) {
             task.setEndTime(request.getEndTime());
+        } else if (task.getEndTime() == null) {
+            task.setEndTime(BusinessTime.effectiveDeadline(
+                    null, task.getStartTime(), task.getCreateTime()));
         }
 
-        if (request.getEndTime() != null) {
-            task.setEndTime(request.getEndTime());
+
+        // 分类 ID 为 0 表示主动清除分类；null 表示编辑请求未修改分类。
+        // 已停用分类可以继续保留在原任务上，但不能重新分配给其他任务。
+        if (request.getCategoryId() != null) {
+            Long requestedCategoryId = request.getCategoryId();
+            if (requestedCategoryId == 0L) {
+                task.setCategoryId(null);
+            } else if (!requestedCategoryId.equals(task.getCategoryId())) {
+                task.setCategoryId(resolveCategoryId(userId, requestedCategoryId));
+            }
         }
 
         // 修改任务目标数量
@@ -450,8 +467,10 @@ public class TaskServiceImpl implements TaskService {
         response.setTitle(task.getTitle());
         response.setNote(task.getNote());
         response.setStartTime(task.getStartTime());
-        response.setEndTime(task.getEndTime());
+        response.setEndTime(BusinessTime.effectiveDeadline(
+                task.getEndTime(), task.getStartTime(), task.getCreateTime()));
         response.setTargetCount(task.getTargetCount());
+        response.setCategoryId(task.getCategoryId());
         String recordRule = task.getRecordRule();
 
         if (recordRule == null){
@@ -479,6 +498,30 @@ public class TaskServiceImpl implements TaskService {
         return response;
     }
 
+
+
+    /**
+     * 验证分类归属当前用户且处于启用状态。0/null 均表示未分类。
+     */
+    private Long resolveCategoryId(Long userId, Long categoryId) {
+        if (categoryId == null || categoryId == 0L) {
+            return null;
+        }
+        TaskCategory category = taskCategoryMapper.selectById(userId, categoryId);
+        if (category == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "任务分类不存在或不属于当前用户"
+            );
+        }
+        if (!Boolean.TRUE.equals(category.getEnabled())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "该任务分类已停用，不能用于新任务或修改任务分类"
+            );
+        }
+        return categoryId;
+    }
 
     private void checkTime(
             LocalDateTime start,

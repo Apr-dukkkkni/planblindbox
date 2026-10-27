@@ -23,6 +23,17 @@ public interface HabitRecordMapper {
                                       @Param("recordDate") LocalDate recordDate);
 
     @Select("""
+            SELECT hr.*
+            FROM habit_record hr
+            JOIN habit h ON h.habit_id = hr.habit_id
+            WHERE h.user_id = #{userId}
+              AND hr.record_date = #{recordDate}
+            """)
+    List<HabitRecord> selectByUserIdAndDate(@Param("userId") Long userId,
+                                            @Param("recordDate") LocalDate recordDate);
+
+
+    @Select("""
             SELECT record_date FROM habit_record
             WHERE habit_id = #{habitId} AND status = 'COMPLETED'
             ORDER BY record_date DESC

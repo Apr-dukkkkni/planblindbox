@@ -22,6 +22,8 @@ public class TaskResponse {
 
     private Integer targetCount;
 
+    private Long categoryId;
+
     private JsonNode recordRule;
 
     private TaskStatus status;

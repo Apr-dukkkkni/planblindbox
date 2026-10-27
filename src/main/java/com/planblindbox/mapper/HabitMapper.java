@@ -36,6 +36,15 @@ public interface HabitMapper {
             """)
     List<Habit> selectByUserId(@Param("userId") Long userId);
 
+    /** 日历历史查询使用：包含已归档习惯，以便展示过去已有的打卡记录。 */
+    @Select("""
+            SELECT * FROM habit
+            WHERE user_id = #{userId}
+            ORDER BY name, habit_id
+            """)
+    List<Habit> selectAllByUserIdForCalendar(@Param("userId") Long userId);
+
+
     @Update("""
             UPDATE habit SET
                 name = #{name},

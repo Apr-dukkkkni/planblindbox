@@ -1,6 +1,5 @@
 package com.planblindbox.dto.request;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.planblindbox.enums.TaskStatus;
 import jakarta.validation.constraints.Max;
@@ -19,10 +18,15 @@ public class TaskUpdateRequest {
 
     private LocalDateTime startTime;
 
+    /** 可选的新截止时间；未传入时保留任务原有截止时间。 */
     private LocalDateTime endTime;
 
     @Min(1)
     private Integer targetCount;
+
+    /** 更新时：未传表示不修改；0 表示清除分类。 */
+    @Min(0)
+    private Long categoryId;
     private JsonNode recordRule;
 
     private TaskStatus status;

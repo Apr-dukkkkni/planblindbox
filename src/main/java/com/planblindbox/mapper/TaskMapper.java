@@ -10,6 +10,7 @@ public interface TaskMapper {
     @Insert("""
             INSERT INTO task (
                 user_id,
+                category_id,
                 title,
                 note,
                 start_time,
@@ -25,6 +26,7 @@ public interface TaskMapper {
             )
             VALUES (
                 #{userId},
+                #{categoryId},
                 #{title},
                 #{note},
                 #{startTime},
@@ -93,6 +95,15 @@ public interface TaskMapper {
     List<Task> selectByUserId(Long userId);
 
 
+    /** 日历历史查询使用：包含已归档任务，是否展示由当天记录与时间范围决定。 */
+    @Select("""
+            SELECT * FROM task
+            WHERE user_id = #{userId}
+            ORDER BY start_time, task_id
+            """)
+    List<Task> selectAllByUserIdForCalendar(@Param("userId") Long userId);
+
+
     @Update("""
             UPDATE task
             SET
@@ -101,6 +112,7 @@ public interface TaskMapper {
                 start_time = #{startTime},
                 end_time = #{endTime},
                 target_count = #{targetCount},
+                category_id = #{categoryId},
                 record_rule = #{recordRule},
                 status = #{status},
                 importance = #{importance},

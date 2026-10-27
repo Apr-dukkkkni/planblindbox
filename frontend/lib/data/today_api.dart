@@ -121,12 +121,50 @@ class TodayApi {
     return EarnedReward.fromResponse(result);
   }
 
+
+  Future<List<Map<String, dynamic>>> getTaskCategories({
+    bool includeDisabled = false,
+  }) async {
+    final params = <String, String>{'userId': '$userId'};
+    if (includeDisabled) params['includeDisabled'] = 'true';
+    final result = await _request('GET', _url('/task-categories', params));
+    final items = result['items'] as List? ?? [];
+    return items.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  }
+
+  Future<void> createTaskCategory({
+    required String name,
+    required String color,
+  }) async {
+    await _request('POST', _url('/task-categories'), body: {
+      'userId': userId,
+      'name': name,
+      'color': color,
+    });
+  }
+
+  Future<void> updateTaskCategory({
+    required int categoryId,
+    String? name,
+    String? color,
+    bool? enabled,
+  }) async {
+    await _request('PUT', _url('/task-categories/$categoryId', {
+      'userId': '$userId',
+    }), body: {
+      if (name != null) 'name': name,
+      if (color != null) 'color': color,
+      if (enabled != null) 'enabled': enabled,
+    });
+  }
+
   Future<void> createTask({
     required String title,
     required String note,
     required int targetCount,
     required int importance,
     required int difficulty,
+    required int categoryId,
     DateTime? endTime,
     Map<String, dynamic>? recordRule,
   }) async {
@@ -138,6 +176,7 @@ class TodayApi {
       if (endTime != null)
         'endTime': _localDateTime(endTime),
       'targetCount': targetCount,
+      'categoryId': categoryId,
       'importance': importance,
       'difficulty': difficulty,
       if (recordRule != null) 'recordRule': recordRule,
@@ -151,7 +190,8 @@ class TodayApi {
     required int targetCount,
     required int importance,
     required int difficulty,
-    required DateTime endTime,
+    required int categoryId,
+    DateTime? endTime,
     required Map<String, dynamic> recordRule,
   }) async {
     await _request(
@@ -163,9 +203,10 @@ class TodayApi {
         'title': title,
         'note': note,
         'targetCount': targetCount,
+        'categoryId': categoryId,
         'importance': importance,
         'difficulty': difficulty,
-        'endTime': _localDateTime(endTime),
+        if (endTime != null) 'endTime': _localDateTime(endTime),
         'recordRule': recordRule,
       },
     );

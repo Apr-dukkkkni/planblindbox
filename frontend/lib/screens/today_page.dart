@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import '../widgets/dashboard_cards.dart';
 import 'dart:math';
 import 'task_library_page.dart';
+import 'task_category_page.dart';
 import 'habit_management_page.dart';
 
 class TodayPage extends StatefulWidget {
@@ -167,20 +168,36 @@ class _TodayPageState extends State<TodayPage> {
     }
   }
 
-  Future<void> _createHabit() async {
-    final succeeded = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => HabitComposer(api: widget.api,
-          startDate: _data?.date ?? _todayString()),
-    );
-    if (succeeded == true && mounted) {
-      _message('每日习惯创建成功');
-      await _load();
+
+
+  Future<bool> _editTaskFromLibrary(int taskId) async {
+    try {
+      final detail = await widget.api.getTask(taskId);
+      if (!mounted) return false;
+
+      final succeeded = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) => TaskComposer(
+          api: widget.api,
+          taskDetail: detail,
+        ),
+      );
+
+      if (succeeded == true && mounted) {
+        _message('任务修改成功');
+        await _load();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      if (mounted) {
+        _message('编辑任务失败：$error', error: true);
+      }
+      return false;
     }
   }
-
 
   Future<void> _openHabitManagement() async {
     final businessDate = _data?.date;
@@ -259,7 +276,10 @@ class _TodayPageState extends State<TodayPage> {
                   onPressed: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => TaskLibraryPage(api: widget.api),
+                        builder: (_) => TaskLibraryPage(
+                          api: widget.api,
+                          onEditTask: _editTaskFromLibrary,
+                        ),
                       ),
                     );
                   },
@@ -494,6 +514,10 @@ class _TaskComposerState extends State<TaskComposer> {
   int _importance = 3;
   int _difficulty = 3;
   DateTime? _end;
+  List<Map<String, dynamic>> _categories = [];
+  int _categoryId = 0;
+  bool _categoriesLoading = true;
+  String? _categoryError;
   bool _saving = false;
   String? _error;
 
@@ -503,7 +527,12 @@ class _TaskComposerState extends State<TaskComposer> {
 
     // 创建模式继续使用原来的默认值
     final detail = widget.taskDetail;
-    if (detail == null) return;
+    if (detail == null) {
+      _loadCategories();
+      return;
+    }
+    _categoryId = (detail['categoryId'] as num?)?.toInt() ?? 0;
+    _loadCategories();
 
     // 1. 初始化基础信息
     _title.text = detail['title']?.toString() ?? '';
@@ -514,14 +543,8 @@ class _TaskComposerState extends State<TaskComposer> {
     _importance = (detail['importance'] as num?)?.toInt() ?? 3;
     _difficulty = (detail['difficulty'] as num?)?.toInt() ?? 3;
 
-    // 3. 初始化截止时间
-    final endTime = DateTime.tryParse(
-      detail['endTime']?.toString() ?? '',
-    );
-
-    if (endTime != null) {
-      _end = endTime;
-    }
+    // 编辑时保留当前截止时间；新建任务默认不指定，交由后端设置为下一个凌晨 05:00。
+    _end = DateTime.tryParse(detail['endTime']?.toString() ?? '');
 
     // 4. 初始化记录规则
     final rule = detail['recordRule'];
@@ -550,9 +573,47 @@ class _TaskComposerState extends State<TaskComposer> {
     super.dispose();
   }
 
+
+  Future<void> _loadCategories() async {
+    try {
+      final categories = await widget.api.getTaskCategories(includeDisabled: true);
+      if (!mounted) return;
+      final active = categories.where((item) => item['enabled'] == true).toList();
+      setState(() {
+        _categories = categories;
+        _categoriesLoading = false;
+        _categoryError = null;
+        if (!widget.isEditing && _categoryId == 0) {
+          final other = active.where((item) => item['name'] == '其他').toList();
+          if (other.isNotEmpty) {
+            _categoryId = (other.first['categoryId'] as num).toInt();
+          } else if (active.isNotEmpty) {
+            _categoryId = (active.first['categoryId'] as num).toInt();
+          }
+        }
+        if (_categoryId != 0 &&
+            !categories.any((item) => (item['categoryId'] as num).toInt() == _categoryId)) {
+          _categoryId = 0;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _categoriesLoading = false;
+        _categoryError = error.toString();
+      });
+    }
+  }
+
+  Future<void> _manageCategories() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => TaskCategoryPage(api: widget.api)),
+    );
+    if (mounted) await _loadCategories();
+  }
+
   Future<void> _pickEnd() async {
     final now = DateTime.now();
-
     final initial = _end != null && _end!.isAfter(now)
         ? _end!
         : now.add(const Duration(hours: 2));
@@ -561,34 +622,51 @@ class _TaskComposerState extends State<TaskComposer> {
       context: context,
       initialDate: initial,
       firstDate: DateTime(now.year, now.month, now.day),
-      lastDate: now.add(const Duration(days: 365 * 5)),
+      lastDate: DateTime(now.year + 5, now.month, now.day),
     );
-
     if (date == null || !mounted) return;
 
     final time = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(initial),
     );
-
     if (time == null || !mounted) return;
 
+    final selected = DateTime(
+      date.year, date.month, date.day, time.hour, time.minute,
+    );
+    if (!selected.isAfter(DateTime.now())) {
+      setState(() => _error = '自定义截止时间必须晚于当前时间');
+      return;
+    }
     setState(() {
-      _end = DateTime(
-        date.year,
-        date.month,
-        date.day,
-        time.hour,
-        time.minute,
-      );
+      _end = selected;
+      _error = null;
     });
+  }
+
+  String _formatEnd(DateTime value) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${value.year}-${two(value.month)}-${two(value.day)} '
+        '${two(value.hour)}:${two(value.minute)}';
   }
 
   Future<void> _save() async {
     final title = _title.text.trim();
     final count = int.tryParse(_target.text.trim());
-    if (title.isEmpty || count == null || count < 1 || (_end != null && !_end!.isAfter(DateTime.now()))) {
-      setState(() => _error = '请填写标题、正整数目标次数以及未来的截止时间');
+    final originalEnd = DateTime.tryParse(
+      widget.taskDetail?['endTime']?.toString() ?? '',
+    );
+    final unchangedHistoricalEnd = widget.isEditing &&
+        _end != null &&
+        originalEnd != null &&
+        _end!.isAtSameMomentAs(originalEnd);
+    final invalidEnd = _end != null &&
+        !_end!.isAfter(DateTime.now()) &&
+        !unchangedHistoricalEnd;
+
+    if (title.isEmpty || count == null || count < 1 || invalidEnd) {
+      setState(() => _error = '请填写标题、正整数目标次数，并确保新设置的截止时间在未来');
       return;
     }
     // 根据用户选择，生成任务记录规则
@@ -617,11 +695,6 @@ class _TaskComposerState extends State<TaskComposer> {
         final detail = widget.taskDetail!;
         final taskId = (detail['taskId'] as num).toInt();
 
-        // 编辑时必须有有效的截止时间
-        if (_end == null || !_end!.isAfter(DateTime.now())) {
-          throw Exception('请重新选择未来的截止时间');
-        }
-
         await widget.api.updateTask(
           taskId: taskId,
           title: title,
@@ -629,7 +702,8 @@ class _TaskComposerState extends State<TaskComposer> {
           targetCount: count,
           importance: _importance,
           difficulty: _difficulty,
-          endTime: _end!,
+          categoryId: _categoryId,
+          endTime: _end,
           recordRule: recordRule,
         );
       } else {
@@ -639,6 +713,7 @@ class _TaskComposerState extends State<TaskComposer> {
           targetCount: count,
           importance: _importance,
           difficulty: _difficulty,
+          categoryId: _categoryId,
           endTime: _end,
           recordRule: recordRule,
         );
@@ -660,6 +735,45 @@ class _TaskComposerState extends State<TaskComposer> {
       const SizedBox(height: 10),
       TextField(controller: _note, maxLines: 2,
           decoration: const InputDecoration(labelText: '备注（可选）')),
+      const SizedBox(height: 13),
+      DropdownButtonFormField<int>(
+        value: _categoryId,
+        decoration: InputDecoration(
+          labelText: '任务分类',
+          helperText: _categoryError == null ? '分类可在任务库中自定义' : '分类加载失败，可重试',
+        ),
+        items: [
+          const DropdownMenuItem<int>(value: 0, child: Text('未分类')),
+          if (_categoryId != 0 &&
+              !_categories.any((item) =>
+                  (item['categoryId'] as num).toInt() == _categoryId))
+            DropdownMenuItem<int>(
+              value: _categoryId,
+              child: const Text('当前分类（暂不可用）'),
+            ),
+          ..._categories.map((category) {
+            final id = (category['categoryId'] as num).toInt();
+            final enabled = category['enabled'] == true;
+            final selected = id == _categoryId;
+            return DropdownMenuItem<int>(
+              value: id,
+              enabled: enabled || selected,
+              child: Text('${category['name'] ?? ''}${enabled ? '' : '（已停用）'}'),
+            );
+          }),
+        ],
+        onChanged: _categoriesLoading ? null : (value) {
+          if (value != null) setState(() => _categoryId = value);
+        },
+      ),
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton.icon(
+          onPressed: _manageCategories,
+          icon: const Icon(Icons.category_outlined, size: 18),
+          label: const Text('管理分类'),
+        ),
+      ),
       const SizedBox(height: 13),
       TextField(controller: _target, keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -725,30 +839,43 @@ class _TaskComposerState extends State<TaskComposer> {
       const SizedBox(height: 9),
       _rating('任务难度（奖励算法后续接入）', _difficulty, (n) => setState(() => _difficulty = n)),
       const SizedBox(height: 12),
-  OutlinedButton.icon(
-  onPressed: _pickEnd,
-  icon: const Icon(Icons.event_outlined),
-  label: Text(
-  _end == null
-  ? '截止：默认下一次凌晨 5:00'
-      : '截止：${_end!.month}/${_end!.day} '
-  '${_end!.hour.toString().padLeft(2, '0')}:'
-  '${_end!.minute.toString().padLeft(2, '0')}',
-  ),
-  ),
-
-  if (_end != null && !widget.isEditing)
-  TextButton(
-  onPressed: () {
-  setState(() => _end = null);
-  },
-  child: const Text('恢复默认截止时间'),
-  ),
+      OutlinedButton.icon(
+        onPressed: _saving ? null : _pickEnd,
+        icon: const Icon(Icons.event_available_rounded),
+        label: Text(_end == null
+            ? '设置自定义截止时间（可选）'
+            : '截止时间：${_formatEnd(_end!)}'),
+      ),
+      if (!widget.isEditing && _end != null)
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: _saving ? null : () => setState(() { _end = null; _error = null; }),
+            child: const Text('恢复默认截止时间（下一个凌晨 05:00）'),
+          ),
+        ),
+      const SizedBox(height: 12),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.paleGreen,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Row(children: [
+          Icon(Icons.schedule_rounded, size: 18, color: AppColors.forest),
+          SizedBox(width: 8),
+          Expanded(child: Text(
+            '默认截止时间为下一个凌晨 05:00；长期任务可设置自定义截止时间。',
+            style: TextStyle(fontSize: 12, color: AppColors.forest),
+          )),
+        ]),
+      ),
       if (_error != null) Padding(padding: const EdgeInsets.only(top: 10),
           child: Text(_error!, style: const TextStyle(color: AppColors.rose, fontSize: 12))),
       const SizedBox(height: 16),
       SizedBox(width: double.infinity, child: FilledButton(
-        onPressed: _saving ? null : _save,
+        onPressed: (_saving || _categoriesLoading) ? null : _save,
         style: FilledButton.styleFrom(backgroundColor: AppColors.forest,
           minimumSize: const Size.fromHeight(50)),
         child: Text(_saving ? (widget.isEditing ? '正在保存…' : '正在创建…') : (widget.isEditing ? '保存修改' : '创建任务')),
@@ -851,8 +978,4 @@ Widget _rating(String label, int selected, ValueChanged<int> change) => Column(
   ],
 );
 
-String _todayString() {
-  final now = DateTime.now();
-  String pad(int value) => value.toString().padLeft(2, '0');
-  return '${now.year}-${pad(now.month)}-${pad(now.day)}';
-}
+

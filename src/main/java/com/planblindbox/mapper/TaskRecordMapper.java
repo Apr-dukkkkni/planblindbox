@@ -60,6 +60,17 @@ public interface TaskRecordMapper {
     List<TaskRecord> selectByTaskId(@Param("taskId") Long taskId);
 
     @Select("""
+            SELECT tr.*
+            FROM task_record tr
+            JOIN task t ON t.task_id = tr.task_id
+            WHERE t.user_id = #{userId}
+              AND tr.record_date = #{recordDate}
+            """)
+    List<TaskRecord> selectByUserIdAndDate(@Param("userId") Long userId,
+                                           @Param("recordDate") LocalDate recordDate);
+
+
+    @Select("""
             SELECT COALESCE(SUM(actual_count), 0)
             FROM task_record
             WHERE task_id = #{taskId}

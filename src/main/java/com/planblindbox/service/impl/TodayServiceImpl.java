@@ -131,7 +131,7 @@ public class TodayServiceImpl implements TodayService {
             item.setTitle(task.getTitle());
             item.setNote(task.getNote());
             item.setStartTime(task.getStartTime());
-            item.setEndTime(task.getEndTime());
+            item.setEndTime(deadline);
             item.setPriorityScore(task.getPriorityScore());
             item.setImportance(task.getImportance());
             item.setDifficulty(task.getDifficulty());

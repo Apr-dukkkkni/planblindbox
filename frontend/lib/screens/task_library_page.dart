@@ -1,11 +1,16 @@
-
 import 'package:flutter/material.dart';
 import '../data/today_api.dart';
+import 'task_category_page.dart';
 
 class TaskLibraryPage extends StatefulWidget {
-  const TaskLibraryPage({super.key, required this.api});
+  const TaskLibraryPage({
+    super.key,
+    required this.api,
+    this.onEditTask,
+  });
 
   final TodayApi api;
+  final Future<bool> Function(int taskId)? onEditTask;
 
   @override
   State<TaskLibraryPage> createState() => _TaskLibraryPageState();
@@ -13,6 +18,7 @@ class TaskLibraryPage extends StatefulWidget {
 
 class _TaskLibraryPageState extends State<TaskLibraryPage> {
   List<Map<String, dynamic>> _tasks = [];
+  List<Map<String, dynamic>> _categories = [];
   String _filter = 'ALL';
   bool _loading = true;
   String? _error;
@@ -39,10 +45,14 @@ class _TaskLibraryPageState extends State<TaskLibraryPage> {
 
     try {
       final tasks = await widget.api.getAllTasks();
+      final categories = await widget.api.getTaskCategories(includeDisabled: true);
 
       if (!mounted) return;
 
-      setState(() => _tasks = tasks);
+      setState(() {
+        _tasks = tasks;
+        _categories = categories;
+      });
     } catch (error) {
       if (mounted) {
         setState(() => _error = error.toString());
@@ -72,6 +82,18 @@ class _TaskLibraryPageState extends State<TaskLibraryPage> {
     }
 
     return 'ACTIVE';
+  }
+
+  String _categoryName(Map<String, dynamic> task) {
+    final id = (task['categoryId'] as num?)?.toInt() ?? 0;
+    if (id == 0) return '未分类';
+    for (final category in _categories) {
+      if ((category['categoryId'] as num).toInt() == id) {
+        final name = category['name']?.toString() ?? '未命名分类';
+        return category['enabled'] == true ? name : '$name（已停用）';
+      }
+    }
+    return '历史分类';
   }
 
   String _statusText(Map<String, dynamic> task) {
@@ -113,6 +135,16 @@ class _TaskLibraryPageState extends State<TaskLibraryPage> {
       appBar: AppBar(
         title: const Text('我的任务库'),
         actions: [
+          IconButton(
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => TaskCategoryPage(api: widget.api)),
+              );
+              if (mounted) await _load();
+            },
+            tooltip: '管理分类',
+            icon: const Icon(Icons.category_outlined),
+          ),
           IconButton(
             onPressed: _loading ? null : _load,
             tooltip: '刷新任务',
@@ -158,41 +190,58 @@ class _TaskLibraryPageState extends State<TaskLibraryPage> {
                 itemBuilder: (context, index) {
                   final task = visibleTasks[index];
 
+                  final taskId = (task['taskId'] as num?)?.toInt();
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment:
-                        CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  task['title']?.toString() ?? '',
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: widget.onEditTask == null || taskId == null
+                          ? null
+                          : () async {
+                              final saved = await widget.onEditTask!(taskId);
+                              if (saved && mounted) await _load();
+                            },
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    task['title']?.toString() ?? '',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
                                 ),
+                                const Icon(Icons.edit_outlined, size: 18),
+                                const SizedBox(width: 8),
+                                Chip(
+                                  label: Text(_statusText(task)),
+                                ),
+                              ],
+                            ),
+                            if ((task['note']?.toString() ?? '').isNotEmpty)
+                              Text(task['note'].toString()),
+                            const SizedBox(height: 6),
+                            Text('分类：${_categoryName(task)}',
+                                style: const TextStyle(color: Colors.grey)),
+                            const SizedBox(height: 8),
+                            Text('目标次数：${task['targetCount'] ?? 0}'),
+                            Text('截止时间：${_formatTime(task['endTime'])}'),
+                            if (widget.onEditTask != null)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 8),
+                                child: Text(
+                                  '点击卡片编辑',
+                                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                                ),
                               ),
-                              Chip(
-                                label: Text(_statusText(task)),
-                              ),
-                            ],
-                          ),
-                          if ((task['note']?.toString() ?? '')
-                              .isNotEmpty)
-                            Text(task['note'].toString()),
-                          const SizedBox(height: 8),
-                          Text(
-                            '目标次数：${task['targetCount'] ?? 0}',
-                          ),
-                          Text(
-                            '截止时间：${_formatTime(task['endTime'])}',
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   );

@@ -8,6 +8,7 @@ import com.planblindbox.enums.HabitStatus;
 import com.planblindbox.mapper.HabitRecordMapper;
 import com.planblindbox.service.HabitCheckInService;
 import com.planblindbox.service.HabitService;
+import com.planblindbox.util.BusinessTime;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,6 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -38,7 +40,7 @@ class HabitCheckInIntegrationTest {
     void dailyCheckInCreatesOneRecordAndRewardButRejectsSecondCheckIn() throws Exception {
         setRule(true);
         long userId = newUser();
-        long habitId = newHabit(userId, LocalDate.now().minusDays(1), null, "{\"type\":\"DAILY\"}");
+        long habitId = newHabit(userId, businessToday().minusDays(1), null, "{\"type\":\"DAILY\"}");
 
         HabitCheckInResponse before = checkInService.getTodayStatus(userId, habitId);
         assertFalse(before.getCheckedInToday());
@@ -72,8 +74,8 @@ class HabitCheckInIntegrationTest {
     void weeklyNonScheduledDayCannotCheckIn() throws Exception {
         setRule(true);
         long userId = newUser();
-        int tomorrowWeekday = LocalDate.now().plusDays(1).getDayOfWeek().getValue();
-        long id = newHabit(userId, LocalDate.now().minusDays(2), null,
+        int tomorrowWeekday = businessToday().plusDays(1).getDayOfWeek().getValue();
+        long id = newHabit(userId, businessToday().minusDays(2), null,
                 "{\"type\":\"WEEKLY\",\"daysOfWeek\":[" + tomorrowWeekday + "]}");
         assertEquals(409, assertThrows(ResponseStatusException.class,
                 () -> checkInService.checkIn(userId, id)).getStatusCode().value());
@@ -85,7 +87,7 @@ class HabitCheckInIntegrationTest {
     void weeklyStreakSkipsOtherWeekdays() throws Exception {
         setRule(true);
         long userId = newUser();
-        LocalDate today = LocalDate.now();
+        LocalDate today = businessToday();
         int weekday = today.getDayOfWeek().getValue();
         long id = newHabit(userId, today.minusWeeks(2), null,
                 "{\"type\":\"WEEKLY\",\"daysOfWeek\":[" + weekday + "]}");
@@ -103,7 +105,7 @@ class HabitCheckInIntegrationTest {
     void missedDueDayBreaksStreakButTodayCanRestartIt() throws Exception {
         setRule(true);
         long userId = newUser();
-        LocalDate today = LocalDate.now();
+        LocalDate today = businessToday();
         long id = newHabit(userId, today.minusDays(3), null, "{\"type\":\"DAILY\"}");
         historicalRecord(id, today.minusDays(2)); // 昨天漏打
         assertEquals(0, checkInService.getTodayStatus(userId, id).getCurrentStreak());
@@ -116,7 +118,7 @@ class HabitCheckInIntegrationTest {
         setRule(true);
         long owner = newUser();
         long outsider = newUser();
-        long id = newHabit(owner, LocalDate.now(), null, "{\"type\":\"DAILY\"}");
+        long id = newHabit(owner, businessToday(), null, "{\"type\":\"DAILY\"}");
         assertEquals(404, assertThrows(ResponseStatusException.class,
                 () -> checkInService.checkIn(outsider, id)).getStatusCode().value());
         HabitUpdateRequest pause = new HabitUpdateRequest();
@@ -134,8 +136,8 @@ class HabitCheckInIntegrationTest {
     void dateRangeBlocksCheckIn() throws Exception {
         setRule(true);
         long userId = newUser();
-        long future = newHabit(userId, LocalDate.now().plusDays(1), null, "{\"type\":\"DAILY\"}");
-        long expired = newHabit(userId, LocalDate.now().minusDays(5), LocalDate.now().minusDays(1),
+        long future = newHabit(userId, businessToday().plusDays(1), null, "{\"type\":\"DAILY\"}");
+        long expired = newHabit(userId, businessToday().minusDays(5), businessToday().minusDays(1),
                 "{\"type\":\"DAILY\"}");
         assertEquals(409, assertThrows(ResponseStatusException.class,
                 () -> checkInService.checkIn(userId, future)).getStatusCode().value());
@@ -147,12 +149,17 @@ class HabitCheckInIntegrationTest {
     void disabledRewardStillRecordsCheckIn() throws Exception {
         setRule(false);
         long userId = newUser();
-        long id = newHabit(userId, LocalDate.now(), null, "{\"type\":\"DAILY\"}");
+        long id = newHabit(userId, businessToday(), null, "{\"type\":\"DAILY\"}");
         HabitCheckInResponse response = checkInService.checkIn(userId, id);
         assertEquals(1, response.getTotalCheckInDays());
         assertFalse(response.getReward().getGranted());
         assertEquals(0, countLedgers(userId));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM user_asset WHERE user_id=?", Integer.class, userId));
+    }
+
+
+    private LocalDate businessToday() {
+        return BusinessTime.businessDate(LocalDateTime.now());
     }
 
     private void setRule(boolean enabled) {
