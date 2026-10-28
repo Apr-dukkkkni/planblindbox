@@ -18,8 +18,7 @@ public final class BusinessTime {
 
     // 获取当前时间之后最近一次凌晨 5 点。
     public static LocalDateTime nextReset(LocalDateTime now) {
-        LocalDateTime reset = now.toLocalDate().atTime(RESET_TIME);
-        return now.isBefore(reset) ? reset : reset.plusDays(1);
+        return now.toLocalDate().plusDays(1).atTime(RESET_TIME);
     }
 
     /**

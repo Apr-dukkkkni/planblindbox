@@ -77,6 +77,19 @@ public interface TaskRecordMapper {
             """)
     Long sumActualCount(@Param("taskId") Long taskId);
 
+    /** 查询指定业务日期范围内的累计执行数量（两端均包含）。 */
+    @Select("""
+            SELECT COALESCE(SUM(actual_count), 0)
+            FROM task_record
+            WHERE task_id = #{taskId}
+              AND record_date BETWEEN #{startDate} AND #{endDate}
+            """)
+    Long sumActualCountBetween(
+            @Param("taskId") Long taskId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
     /**
      * 原子累加当日数量，避免先读后写造成丢失更新。
      * 同日首次创建由调用方负责；后续在 Task Service 中锁定任务行再处理。

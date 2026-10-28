@@ -51,7 +51,7 @@ public class TaskServiceImpl implements TaskService {
                         ? request.getStartTime()
                         : now;
 
-        // 未指定截止时间时，默认截止于开始时间之后的下一个业务日切换点（凌晨 5 点）。
+        // 未指定截止时间时，默认截止于开始时间之后的下一个业务日切换点（凌晨 12 点）。
         // 如果用户明确设置了截止时间（例如长期任务），则保留用户指定的时间。
         LocalDateTime effectiveEnd = request.getEndTime() != null
                 ? request.getEndTime()
