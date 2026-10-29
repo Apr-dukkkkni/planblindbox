@@ -15,6 +15,8 @@ public class HabitUpdateRequest {
     private String note;
     private LocalDate startDate;
     private LocalDate endDate;
+    private Integer importance;
+    private Integer difficulty;
     private JsonNode repeatRule;
     /** 仅允许 ACTIVE / PAUSED；归档走 DELETE。 */
     private HabitStatus status;

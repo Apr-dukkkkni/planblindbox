@@ -1,10 +1,7 @@
 package com.planblindbox.dto.request;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.*;
 import lombok.Data;
 
 import java.time.LocalDate;
@@ -24,6 +21,15 @@ public class HabitCreateRequest {
     private LocalDate startDate;
 
     private LocalDate endDate;
+
+    @Min(1)
+    @Max(5)
+    private Integer importance = 3;
+
+    /** 紧急程度：1～5，默认 3。 */
+    @Min(1)
+    @Max(5)
+    private Integer difficulty = 3;
 
     /** 如 {"type":"DAILY"} 或 {"type":"WEEKLY","daysOfWeek":[1,3,5]}。 */
     @NotNull

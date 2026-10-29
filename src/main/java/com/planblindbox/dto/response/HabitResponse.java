@@ -13,6 +13,8 @@ public class HabitResponse {
     private String note;
     private LocalDate startDate;
     private LocalDate endDate;
+    private Integer importance;
+    private Integer difficulty;
     private JsonNode repeatRule;
     private HabitStatus status;
 }

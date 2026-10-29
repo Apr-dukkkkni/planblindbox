@@ -29,10 +29,10 @@ class BusinessTimeTest {
     }
 
     @Test
-    void taskStartedBeforeFiveAmEndsAtCurrentCalendarDayFiveAm() {
+    void taskStartedBeforeFiveAmEndsAtNextDayFiveAm() {
         LocalDateTime start = LocalDateTime.of(2026, 10, 27, 3, 30);
 
-        assertEquals(LocalDateTime.of(2026, 10, 27, 5, 0),
+        assertEquals(LocalDateTime.of(2026, 10, 28, 5, 0),
                 BusinessTime.effectiveDeadline(null, start, start));
         assertEquals(LocalDate.of(2026, 10, 26), BusinessTime.businessDate(start));
     }

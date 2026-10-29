@@ -166,26 +166,51 @@ public class TodayServiceImpl implements TodayService {
         return result;
     }
 
-    /**
-     * 按时间：截止时间升序（未设置截止时间最后），同时间按重要程度降序。
-     * 按重要程度：重要程度降序，同级按截止时间升序。
-     * 两种模式均将今天已完成的任务排到最后，再用 taskId 保证稳定顺序。
-     * importance 为 null 时仅排序按 3 处理，不回写数据库，也不改响应值。
-     */
-    private void sortTasks(List<TodayResponse.TaskItem> items, String sortMode) {
-        Comparator<TodayResponse.TaskItem> byEndTime = Comparator.comparing(
-                TodayResponse.TaskItem::getEndTime,
-                Comparator.nullsLast(Comparator.naturalOrder()));
-        Comparator<TodayResponse.TaskItem> byImportance = Comparator.comparingInt(
-                (TodayResponse.TaskItem t) -> t.getImportance() == null ? 3 : t.getImportance()).reversed();
-        Comparator<TodayResponse.TaskItem> main = "importance".equals(sortMode)
-                ? byImportance.thenComparing(byEndTime)
-                : byEndTime.thenComparing(byImportance);
-        items.sort(Comparator.comparing(TodayResponse.TaskItem::isCompletedToday)
-                .thenComparing(main)
-                .thenComparing(TodayResponse.TaskItem::getTaskId,
-                        Comparator.nullsLast(Comparator.naturalOrder())));
+
+
+    private void sortTasks(
+            List<TodayResponse.TaskItem> items,
+            String sortMode
+    ) {
+        Comparator<TodayResponse.TaskItem> byEndTime =
+                Comparator.comparing(
+                        TodayResponse.TaskItem::getEndTime,
+                        Comparator.nullsLast(Comparator.naturalOrder())
+                );
+
+        // 优先级降序；历史数据没有 priorityScore 时，按原始属性计算。
+        Comparator<TodayResponse.TaskItem> byPriority =
+                Comparator.comparing(
+                        (TodayResponse.TaskItem t) -> {
+                            if (t.getPriorityScore() != null) {
+                                return t.getPriorityScore();
+                            }
+
+                            int importance = t.getImportance() == null
+                                    ? 3 : t.getImportance();
+                            int difficulty = t.getDifficulty() == null
+                                    ? 3 : t.getDifficulty();
+
+                            return BigDecimal.valueOf(importance)
+                                    .multiply(BigDecimal.valueOf(difficulty));
+                        }
+                ).reversed();
+
+        Comparator<TodayResponse.TaskItem> main =
+                "importance".equals(sortMode)
+                        ? byPriority.thenComparing(byEndTime)
+                        : byEndTime.thenComparing(byPriority);
+
+        items.sort(
+                Comparator.comparing(TodayResponse.TaskItem::isCompletedToday)
+                        .thenComparing(main)
+                        .thenComparing(
+                                TodayResponse.TaskItem::getTaskId,
+                                Comparator.nullsLast(Comparator.naturalOrder())
+                        )
+        );
     }
+
 
     private String validateSort(String sort) {
         if (sort == null) {

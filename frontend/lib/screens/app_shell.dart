@@ -26,6 +26,89 @@ class _AppShellState extends State<AppShell> {
   int _statsVersion = 0;
   int _myVersion = 0;
 
+  @override
+  void initState() {
+    super.initState();
+
+    // 首次显示应用页面后，自动尝试每日签到。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _signInDaily();
+    });
+  }
+
+  Future<void> _signInDaily() async {
+    try {
+      final result = await widget.api.dailySignIn();
+
+      if (!mounted) return;
+
+      // 今天已经领取过，不重复提示。
+      if (result['granted'] != true) return;
+
+      final totalWater = (result['totalWater'] as num?)?.toInt() ?? 0;
+
+      final streakDay = (result['streakDay'] as num?)?.toInt() ?? 1;
+
+      final baseWater =
+          (result['baseWater'] as num?)?.toInt() ?? totalWater;
+
+      final bonusWater =
+          (result['bonusWater'] as num?)?.toInt() ?? 0;
+
+      final waterBalance =
+          (result['waterBalance'] as num?)?.toInt() ?? 0;
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          icon: Icon(
+            Icons.water_drop_rounded,
+            size: 42,
+            color: Theme.of(dialogContext).colorScheme.primary,
+          ),
+          title: const Text(
+            '每日签到成功！',
+            textAlign: TextAlign.center,
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('连续签到第 $streakDay 天'),
+              const SizedBox(height: 14),
+              Text('基础奖励  +$baseWater 水滴'),
+              Text('阶梯奖励  +$bonusWater 水滴'),
+              const Divider(height: 24),
+              Text(
+                '+$totalWater 水滴',
+                style: const TextStyle(
+                  fontSize: 25,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text('当前余额：$waterBalance 水滴'),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('收下奖励'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('每日签到失败：$error'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
   void _selectTab(int nextIndex) {
     if (nextIndex == _selectedIndex) return;
     setState(() {

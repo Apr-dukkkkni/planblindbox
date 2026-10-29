@@ -132,8 +132,6 @@ public class ShopService {
                     Math.toIntExact(reward.getAmount()), 0L, 0);
             case "EXP" -> grantAssetReward(userId, reward, record.getOpenId(),
                     0, reward.getAmount(), 0);
-            case "WATER" -> grantAssetReward(userId, reward, record.getOpenId(),
-                    0, 0L, Math.toIntExact(reward.getAmount()));
             case "COLLECTIBLE" -> grantCollectible(userId, reward, record.getOpenId());
             default -> throw new IllegalStateException("奖励类型配置异常");
         }
@@ -184,11 +182,13 @@ public class ShopService {
                 throw new IllegalStateException("商店奖励池配置异常");
             }
             switch (reward.getAssetType() == null ? "" : reward.getAssetType()) {
-                case "COIN", "WATER" -> {
+                case "COIN"-> {
                     if (reward.getItemId() != null || reward.getAmount() > Integer.MAX_VALUE) {
-                        throw new IllegalStateException("COIN/WATER 奖励配置异常");
+                        throw new IllegalStateException("COIN奖励配置异常");
                     }
                 }
+                case "WATER" -> throw new IllegalStateException(
+                        "商店奖励不允许配置水滴，水滴仅通过每日签到发放");
                 case "EXP" -> {
                     if (reward.getItemId() != null) {
                         throw new IllegalStateException("EXP 奖励不能关联收藏品");

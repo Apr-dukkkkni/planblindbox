@@ -335,6 +335,8 @@ class _HabitFormState extends State<_HabitForm> {
   String _type = 'DAILY';
   final Set<int> _weekdays = {};
   bool _saving = false;
+  int _importance = 3;
+  int _difficulty = 3;
   String? _error;
 
   @override
@@ -344,6 +346,8 @@ class _HabitFormState extends State<_HabitForm> {
     if (habit == null) return;
     _name.text = habit.name;
     _note.text = habit.note;
+    _importance = habit.importance;
+    _difficulty = habit.difficulty;
     if (habit.repeatRule['type'] == 'WEEKLY') {
       _type = 'WEEKLY';
       final days = habit.repeatRule['daysOfWeek'];
@@ -375,10 +379,14 @@ class _HabitFormState extends State<_HabitForm> {
         ? <String, dynamic>{'type': 'DAILY'}
         : <String, dynamic>{
       'type': 'WEEKLY',
-      'daysOfWeek': _weekdays.toList()..sort(),
+      'daysOfWeek': _weekdays.toList()
+        ..sort(),
     };
 
-    setState(() { _saving = true; _error = null; });
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
     try {
       final habit = widget.original;
       if (habit == null) {
@@ -387,10 +395,18 @@ class _HabitFormState extends State<_HabitForm> {
           note: _note.text.trim(),
           startDate: widget.businessDate,
           repeatRule: rule,
+          importance: _importance,
+          difficulty: _difficulty,
         );
       } else {
-        await widget.api.update(habit.id,
-            name: name, note: _note.text.trim(), repeatRule: rule);
+        await widget.api.update(
+          habit.id,
+          name: name,
+          note: _note.text.trim(),
+          repeatRule: rule,
+          importance: _importance,
+          difficulty: _difficulty,
+        );
       }
       if (mounted) Navigator.of(context).pop(true);
     } catch (error) {
@@ -399,6 +415,7 @@ class _HabitFormState extends State<_HabitForm> {
       if (mounted) setState(() => _saving = false);
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -420,12 +437,59 @@ class _HabitFormState extends State<_HabitForm> {
               maxLength: 100,
               decoration: const InputDecoration(labelText: '习惯名称 *'),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 5),
             TextField(
               controller: _note,
-              maxLines: 2,
+              maxLines: 1,
               decoration: const InputDecoration(labelText: '备注（可选）'),
             ),
+            const SizedBox(height: 12),
+            // 重要程度
+            DropdownButtonFormField<int>(
+              value: _importance,
+              decoration: const InputDecoration(
+                labelText: '重要程度（1～5）',
+              ),
+              items: List.generate(5, (index) {
+                final value = index + 1;
+                return DropdownMenuItem<int>(
+                  value: value,
+                  child: Text('$value'),
+                );
+              }),
+              onChanged: _saving
+                  ? null
+                  : (value) {
+                if (value != null) {
+                  setState(() => _importance = value);
+                }
+              },
+            ),
+
+            const SizedBox(height: 12),
+
+// 困难程度
+            DropdownButtonFormField<int>(
+              value: _difficulty,
+              decoration: const InputDecoration(
+                labelText: '困难程度（1～5）',
+              ),
+              items: List.generate(5, (index) {
+                final value = index + 1;
+                return DropdownMenuItem<int>(
+                  value: value,
+                  child: Text('$value'),
+                );
+              }),
+              onChanged: _saving
+                  ? null
+                  : (value) {
+                if (value != null) {
+                  setState(() => _difficulty = value);
+                }
+              },
+            ),
+            const SizedBox(height: 14),
             const SizedBox(height: 14),
             const Text('重复规则', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),

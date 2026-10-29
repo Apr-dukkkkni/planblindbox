@@ -83,6 +83,8 @@ class HabitApi {
     required String note,
     required String startDate,
     required Map<String, dynamic> repeatRule,
+    required int importance,
+    required int difficulty,
   }) async {
     final data = await _request('POST', _url('/habits'), body: {
       'userId': userId,
@@ -90,7 +92,10 @@ class HabitApi {
       'note': note,
       'startDate': startDate,
       'repeatRule': repeatRule,
+      'importance': importance,
+      'difficulty': difficulty,
     });
+
     return HabitInfo.fromJson(_asMap(data));
   }
 
@@ -99,12 +104,21 @@ class HabitApi {
         required String name,
         required String note,
         required Map<String, dynamic> repeatRule,
+        required int importance,
+        required int difficulty,
       }) async {
     final data = await _request(
       'PUT',
       _url('/habits/$habitId', includeUser: true),
-      body: {'name': name, 'note': note, 'repeatRule': repeatRule},
+      body: {
+        'name': name,
+        'note': note,
+        'repeatRule': repeatRule,
+        'importance': importance,
+        'difficulty': difficulty,
+      },
     );
+
     return HabitInfo.fromJson(_asMap(data));
   }
 
@@ -145,6 +159,8 @@ class HabitInfo {
     required this.endDate,
     required this.status,
     required this.repeatRule,
+    required this.importance,
+    required this.difficulty,
   });
 
   final int id;
@@ -153,6 +169,8 @@ class HabitInfo {
   final String startDate;
   final String? endDate;
   final String status;
+  final int importance;
+  final int difficulty;
   final Map<String, dynamic> repeatRule;
 
   factory HabitInfo.fromJson(Map<String, dynamic> json) {
@@ -168,6 +186,8 @@ class HabitInfo {
       repeatRule: json['repeatRule'] is Map
           ? Map<String, dynamic>.from(json['repeatRule'] as Map)
           : {'type': 'DAILY'},
+      importance: (json['importance'] as num?)?.toInt() ?? 3,
+      difficulty: (json['difficulty'] as num?)?.toInt() ?? 3,
     );
   }
 

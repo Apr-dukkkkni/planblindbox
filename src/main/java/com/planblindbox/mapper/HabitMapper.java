@@ -9,9 +9,15 @@ import java.util.List;
 public interface HabitMapper {
 
     @Insert("""
-            INSERT INTO habit (user_id, name, note, start_date, end_date, repeat_rule, status)
-            VALUES (#{userId}, #{name}, #{note}, #{startDate}, #{endDate}, CAST(#{repeatRule} AS JSON), #{status})
-            """)
+        INSERT INTO habit (
+            user_id, name, note, start_date, end_date,
+            importance, difficulty, repeat_rule, status
+        )
+        VALUES (
+            #{userId}, #{name}, #{note}, #{startDate}, #{endDate},
+            #{importance}, #{difficulty}, CAST(#{repeatRule} AS JSON), #{status}
+        )
+        """)
     @Options(useGeneratedKeys = true, keyProperty = "habitId", keyColumn = "habit_id")
     int insert(Habit habit);
 
@@ -46,15 +52,19 @@ public interface HabitMapper {
 
 
     @Update("""
-            UPDATE habit SET
-                name = #{name},
-                note = #{note},
-                start_date = #{startDate},
-                end_date = #{endDate},
-                repeat_rule = CAST(#{repeatRule} AS JSON),
-                status = #{status}
-            WHERE habit_id = #{habitId} AND user_id = #{userId} AND status <> 'ARCHIVED'
-            """)
+        UPDATE habit SET
+            name = #{name},
+            note = #{note},
+            start_date = #{startDate},
+            end_date = #{endDate},
+            importance = #{importance},
+            difficulty = #{difficulty},
+            repeat_rule = CAST(#{repeatRule} AS JSON),
+            status = #{status}
+        WHERE habit_id = #{habitId}
+          AND user_id = #{userId}
+          AND status <> 'ARCHIVED'
+        """)
     int update(Habit habit);
 
     @Update("""

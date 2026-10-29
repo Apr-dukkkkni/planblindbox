@@ -50,10 +50,19 @@ public class HabitServiceImpl implements HabitService {
         habit.setUserId(request.getUserId());
         habit.setName(request.getName().trim());
         habit.setNote(request.getNote());
-        habit.setStartDate(request.getStartDate());
-        habit.setEndDate(request.getEndDate());
         habit.setRepeatRule(rule);
         habit.setStatus(HabitStatus.ACTIVE);
+
+        habit.setStartDate((request.getStartDate()));
+        habit.setEndDate(request.getEndDate());
+
+        habit.setImportance(
+                request.getImportance() != null ? request.getImportance() : 3
+        );
+        habit.setDifficulty(
+                request.getDifficulty() != null ? request.getDifficulty() : 3
+        );
+        habit.setRepeatRule(rule);
 
         if (habitMapper.insert(habit) != 1) {
             throw new IllegalStateException("创建 Habit 失败");
@@ -150,6 +159,13 @@ public class HabitServiceImpl implements HabitService {
                             request.getRepeatRule()
                     )
             );
+        }
+
+        if (request.getImportance() != null){
+            habit.setImportance((request.getImportance()));
+        }
+        if (request.getDifficulty() != null){
+            habit.setDifficulty(request.getDifficulty());
         }
 
         if (request.getStatus() != null) {
@@ -365,6 +381,10 @@ public class HabitServiceImpl implements HabitService {
         response.setNote(habit.getNote());
         response.setStartDate(habit.getStartDate());
         response.setEndDate(habit.getEndDate());
+        response.setStartDate(habit.getStartDate());
+        response.setEndDate(habit.getEndDate());
+        response.setImportance(habit.getImportance());
+        response.setDifficulty(habit.getDifficulty());
         response.setStatus(habit.getStatus());
 
         try {

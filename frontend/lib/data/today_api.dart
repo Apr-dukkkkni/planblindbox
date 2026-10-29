@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/today_models.dart';
 
-
 class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
   final String message;
@@ -23,24 +22,33 @@ class TodayApi {
   Uri _url(String path, [Map<String, String>? params]) =>
       Uri.parse('$baseUrl$path').replace(queryParameters: params);
 
-  Future<Map<String, dynamic>> _request(String method, Uri uri, {Object? body}) async {
+  Future<Map<String, dynamic>> _request(String method, Uri uri,
+      {Object? body}) async {
     try {
       final headers = <String, String>{'Accept': 'application/json'};
-      if (body != null) headers['Content-Type'] = 'application/json; charset=utf-8';
+      if (body != null)
+        headers['Content-Type'] = 'application/json; charset=utf-8';
       late final http.Response response;
       switch (method) {
         case 'GET':
-          response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 12));
+          response = await _client
+              .get(uri, headers: headers)
+              .timeout(const Duration(seconds: 12));
         case 'POST':
-          response = await _client.post(uri, headers: headers,
-              body: body == null ? null : jsonEncode(body)).timeout(const Duration(seconds: 12));
+          response = await _client
+              .post(uri,
+                  headers: headers,
+                  body: body == null ? null : jsonEncode(body))
+              .timeout(const Duration(seconds: 12));
 
         case 'PUT':
-          response = await _client.put(
-            uri,
-            headers: headers,
-            body: body == null ? null : jsonEncode(body),
-          ).timeout(const Duration(seconds: 12));
+          response = await _client
+              .put(
+                uri,
+                headers: headers,
+                body: body == null ? null : jsonEncode(body),
+              )
+              .timeout(const Duration(seconds: 12));
 
         default:
           throw ApiException('不支持的请求方法：$method');
@@ -48,13 +56,16 @@ class TodayApi {
 
       Map<String, dynamic> envelope;
       try {
-        envelope = Map<String, dynamic>.from(jsonDecode(utf8.decode(response.bodyBytes)) as Map);
+        envelope = Map<String, dynamic>.from(
+            jsonDecode(utf8.decode(response.bodyBytes)) as Map);
       } catch (_) {
         throw ApiException('服务器返回了无法解析的数据（HTTP ${response.statusCode}）',
             statusCode: response.statusCode);
       }
       final code = (envelope['code'] as num?)?.toInt();
-      if (response.statusCode < 200 || response.statusCode >= 300 || code != 200) {
+      if (response.statusCode < 200 ||
+          response.statusCode >= 300 ||
+          code != 200) {
         throw ApiException(
           (envelope['message']?.toString().isNotEmpty ?? false)
               ? envelope['message'].toString()
@@ -86,15 +97,16 @@ class TodayApi {
 
     final items = result['items'] as List? ?? [];
 
-    return items
-        .map((item) => Map<String, dynamic>.from(item as Map))
-        .toList();
+    return items.map((item) => Map<String, dynamic>.from(item as Map)).toList();
   }
 
   Future<TodayData> getToday({String sort = 'time'}) async {
-    final data = await _request('GET', _url('/today', {
-      'userId': '$userId', 'sort': sort,
-    }));
+    final data = await _request(
+        'GET',
+        _url('/today', {
+          'userId': '$userId',
+          'sort': sort,
+        }));
     return TodayData.fromJson(data);
   }
 
@@ -107,20 +119,52 @@ class TodayApi {
     );
   }
 
-  Future<EarnedReward> completeTask({required int taskId, required int actualCount}) async {
-    final result = await _request('POST', _url('/tasks/$taskId/complete', {
-      'userId': '$userId',
-    }), body: {'actualCount': actualCount});
+  Future<EarnedReward> completeTask(
+      {required int taskId, required int actualCount}) async {
+    final result = await _request(
+        'POST',
+        _url('/tasks/$taskId/complete', {
+          'userId': '$userId',
+        }),
+        body: {'actualCount': actualCount});
     return EarnedReward.fromResponse(result);
   }
 
   Future<EarnedReward> checkInHabit(int habitId) async {
-    final result = await _request('POST', _url('/habits/$habitId/check-in', {
-      'userId': '$userId',
-    }));
+    final result = await _request(
+        'POST',
+        _url('/habits/$habitId/check-in', {
+          'userId': '$userId',
+        }));
     return EarnedReward.fromResponse(result);
   }
 
+  Future<Map<String, dynamic>> dailySignIn() async {
+    return await _request(
+      'POST',
+      _url('/daily-sign-in', {'userId': '$userId'}),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getDailySignInRecords({
+    required int year,
+    required int month,
+  }) async {
+    final result = await _request(
+      'GET',
+      _url('/daily-sign-in', {
+        'userId': '$userId',
+        'year': '$year',
+        'month': '$month',
+      }),
+    );
+
+    final items = result['items'] as List? ?? [];
+
+    return items
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+  }
 
   Future<List<Map<String, dynamic>>> getTaskCategories({
     bool includeDisabled = false,
@@ -149,13 +193,16 @@ class TodayApi {
     String? color,
     bool? enabled,
   }) async {
-    await _request('PUT', _url('/task-categories/$categoryId', {
-      'userId': '$userId',
-    }), body: {
-      if (name != null) 'name': name,
-      if (color != null) 'color': color,
-      if (enabled != null) 'enabled': enabled,
-    });
+    await _request(
+        'PUT',
+        _url('/task-categories/$categoryId', {
+          'userId': '$userId',
+        }),
+        body: {
+          if (name != null) 'name': name,
+          if (color != null) 'color': color,
+          if (enabled != null) 'enabled': enabled,
+        });
   }
 
   Future<void> createTask({
@@ -173,8 +220,7 @@ class TodayApi {
       'title': title,
       'note': note,
       'startTime': _localDateTime(DateTime.now()),
-      if (endTime != null)
-        'endTime': _localDateTime(endTime),
+      if (endTime != null) 'endTime': _localDateTime(endTime),
       'targetCount': targetCount,
       'categoryId': categoryId,
       'importance': importance,
@@ -212,7 +258,10 @@ class TodayApi {
     );
   }
 
-  Future<void> createDailyHabit({required String name, required String note, required String startDate}) async {
+  Future<void> createDailyHabit(
+      {required String name,
+      required String note,
+      required String startDate}) async {
     await _request('POST', _url('/habits'), body: {
       'userId': userId,
       'name': name,

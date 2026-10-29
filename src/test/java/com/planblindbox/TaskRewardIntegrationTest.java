@@ -50,19 +50,22 @@ class TaskRewardIntegrationTest {
         assertEquals(60L, second.getTotalActualCount());
         assertNotNull(second.getReward());
         assertTrue(second.getReward().getGranted());
-        assertEquals(10, second.getReward().getCoin());
-        assertEquals(20L, second.getReward().getExp());
-        assertEquals(2, second.getReward().getWater());
-        assertEquals(10, second.getReward().getCoinBalance());
-        assertEquals(20L, second.getReward().getExpBalance());
-        assertEquals(2, second.getReward().getWaterBalance());
-        assertEquals(3, countLedgers(userId, task.getTaskId()));
+        assertEquals(8, second.getReward().getCoin());
+        assertEquals(80L, second.getReward().getExp());
+        assertEquals(0, second.getReward().getWater());
+
+        assertEquals(8, second.getReward().getCoinBalance());
+        assertEquals(80L, second.getReward().getExpBalance());
+        assertEquals(0, second.getReward().getWaterBalance());
+
+        assertEquals(2, countLedgers(userId, task.getTaskId()));
 
         assertThrows(ResponseStatusException.class,
                 () -> taskService.complete(userId, task.getTaskId(), increment(1)));
-        assertEquals(3, countLedgers(userId, task.getTaskId()));
-        assertEquals(10, jdbcTemplate.queryForObject(
-                "SELECT coin FROM user_asset WHERE user_id=?", Integer.class, userId));
+        assertEquals(2, countLedgers(userId, task.getTaskId()));
+        assertEquals(8, jdbcTemplate.queryForObject(
+                "SELECT coin FROM user_asset WHERE user_id=?",
+                Integer.class, userId));
     }
 
     @Test
@@ -73,10 +76,12 @@ class TaskRewardIntegrationTest {
         Task task2 = newTask(userId, 1);
         taskService.complete(userId, task1.getTaskId(), increment(1));
         TaskCompleteResponse second = taskService.complete(userId, task2.getTaskId(), increment(1));
-        assertEquals(20, second.getReward().getCoinBalance());
-        assertEquals(40L, second.getReward().getExpBalance());
-        assertEquals(4, second.getReward().getWaterBalance());
-        assertEquals(6, countLedgers(userId, task1.getTaskId()) + countLedgers(userId, task2.getTaskId()));
+        assertEquals(16, second.getReward().getCoinBalance());
+        assertEquals(160L, second.getReward().getExpBalance());
+        assertEquals(0, second.getReward().getWaterBalance());
+
+        assertEquals(4, countLedgers(userId, task1.getTaskId())
+                + countLedgers(userId, task2.getTaskId()));
     }
 
     @Test
@@ -145,6 +150,8 @@ class TaskRewardIntegrationTest {
         task.setUserId(userId);
         task.setTitle("奖励结算集成测试");
         task.setTargetCount(target);
+        task.setImportance(3);
+        task.setDifficulty(3);
         task.setStatus(TaskStatus.PENDING);
         assertEquals(1, taskMapper.insert(task));
         return task;

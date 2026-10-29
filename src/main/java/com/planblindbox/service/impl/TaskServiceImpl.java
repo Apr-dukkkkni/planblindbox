@@ -19,6 +19,7 @@ import com.planblindbox.entity.TaskCategory;
 import com.planblindbox.mapper.TaskRecordMapper;
 import com.planblindbox.service.TaskService;
 import com.planblindbox.service.RewardService;
+import com.planblindbox.service.rule.TaskPriorityCalculator;
 import com.planblindbox.util.BusinessTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -26,9 +27,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -79,13 +82,25 @@ public class TaskServiceImpl implements TaskService {
                 validateAndSerializeRecordRule(request.getRecordRule())
         );
         task.setStatus(TaskStatus.PENDING);
-        task.setImportance(request.getImportance());
         task.setUrgency(request.getUrgency());
-        task.setDifficulty(request.getDifficulty());
         task.setEstimatedMinutes(request.getEstimatedMinutes());
 
-        // 优先级暂时不计算
-        task.setPriorityScore(null);
+
+        int importance = request.getImportance() == null
+                ? 3 : request.getImportance();
+
+        int difficulty = request.getDifficulty() == null
+                ? 3 : request.getDifficulty();
+
+        task.setImportance(importance);
+        task.setUrgency(request.getUrgency());
+        task.setDifficulty(difficulty);
+        task.setEstimatedMinutes(request.getEstimatedMinutes());
+
+        task.setPriorityScore(
+                TaskPriorityCalculator.calculate(importance, difficulty)
+        );
+
 
         taskMapper.insert(task);
 
@@ -299,6 +314,31 @@ public class TaskServiceImpl implements TaskService {
             task.setDifficulty(request.getDifficulty());
         }
 
+        if (task.getImportance() == null){
+            task.setImportance(3);
+        }
+
+        if(task.getDifficulty() == null ){
+            task.setDifficulty(3);
+        }
+
+        if (task.getImportance() == null) {
+            task.setImportance(3);
+        }
+
+        if (task.getDifficulty() == null) {
+            task.setDifficulty(3);
+        }
+
+        task.setPriorityScore(
+                TaskPriorityCalculator.calculate(
+                        task.getImportance(),
+                        task.getDifficulty()
+                )
+        );
+
+        task.setPriorityScore(BigDecimal.valueOf(task.getImportance()+ task.getDifficulty()));
+
         if (request.getEstimatedMinutes() != null) {
             task.setEstimatedMinutes(
                     request.getEstimatedMinutes()
@@ -409,7 +449,12 @@ public class TaskServiceImpl implements TaskService {
         // 仅在首次达到目标时触发一次结算；任务行锁 + 已完成状态校验阻止重复发奖。
         // 任何奖励 SQL 出错，都会回滚 TaskRecord、Task 状态及已写入的资产数据。
         TaskRewardResponse reward = completed
-                ? rewardService.rewardTaskCompletion(userId, taskId)
+                ? rewardService.rewardTaskCompletion(
+                userId,
+                taskId,
+                task.getImportance(),
+                task.getDifficulty()
+        )
                 : null;
 
         TaskCompleteResponse response = new TaskCompleteResponse();

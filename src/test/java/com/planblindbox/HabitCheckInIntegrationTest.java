@@ -54,18 +54,18 @@ class HabitCheckInIntegrationTest {
         assertTrue(after.getReward().getGranted());
         assertEquals(2, after.getReward().getCoin());
         assertEquals(5L, after.getReward().getExp());
-        assertEquals(1, after.getReward().getWater());
-        assertEquals(3, countLedgers(userId));
+        assertEquals(0, after.getReward().getWater());
+        assertEquals(2, countLedgers(userId));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM habit_record WHERE habit_id=?", Integer.class, habitId));
         Long recordId = jdbc.queryForObject("SELECT habit_record_id FROM habit_record WHERE habit_id=?", Long.class, habitId);
-        assertEquals(3, jdbc.queryForObject(
+        assertEquals(2, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM asset_record WHERE source='HABIT_RECORD' AND source_id=?", Integer.class, recordId));
         assertEquals(2, jdbc.queryForObject("SELECT coin FROM user_asset WHERE user_id=?", Integer.class, userId));
 
         ResponseStatusException duplicate = assertThrows(ResponseStatusException.class,
                 () -> checkInService.checkIn(userId, habitId));
         assertEquals(409, duplicate.getStatusCode().value());
-        assertEquals(3, countLedgers(userId));
+        assertEquals(2, countLedgers(userId));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM habit_record WHERE habit_id=?", Integer.class, habitId));
         assertNull(checkInService.getTodayStatus(userId, habitId).getReward());
     }

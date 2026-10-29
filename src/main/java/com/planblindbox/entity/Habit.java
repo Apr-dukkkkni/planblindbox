@@ -14,6 +14,8 @@ public class Habit {
     private String note;
     private LocalDate startDate;
     private LocalDate endDate;
+    private Integer importance;
+    private Integer difficulty;
 
     /** 数据库 JSON 原文。不要将数据库 JSON 字段直接暴露到前端。 */
     private String repeatRule;

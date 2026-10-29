@@ -19,3 +19,19 @@ CREATE TABLE IF NOT EXISTS time_record (
     CONSTRAINT fk_time_record_user FOREIGN KEY (user_id) REFERENCES app_user(user_id),
     CONSTRAINT fk_time_record_task FOREIGN KEY (task_id) REFERENCES task(task_id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='时间块记录表';
+
+
+
+CREATE TABLE daily_sign_in (
+                               sign_in_id BIGINT NOT NULL AUTO_INCREMENT,
+                               user_id BIGINT NOT NULL,
+                               business_date DATE NOT NULL COMMENT '按凌晨05:00切换的业务日期',
+                               streak_day TINYINT UNSIGNED NOT NULL COMMENT '当月连续签到天数',
+                               base_water INT UNSIGNED NOT NULL DEFAULT 5 COMMENT '每日基础水滴',
+                               bonus_water INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '连续签到额外水滴',
+                               total_water INT UNSIGNED NOT NULL COMMENT '当日水滴总奖励',
+                               create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                               PRIMARY KEY (sign_in_id),
+                               UNIQUE KEY uk_user_business_date (user_id, business_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

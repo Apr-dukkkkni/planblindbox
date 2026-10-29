@@ -8,6 +8,7 @@ import 'dart:math';
 import 'task_library_page.dart';
 import 'task_category_page.dart';
 import 'habit_management_page.dart';
+import 'daily_sign_in_calendar_page.dart';
 
 class TodayPage extends StatefulWidget {
   const TodayPage({super.key, required this.api});
@@ -244,6 +245,17 @@ class _TodayPageState extends State<TodayPage> {
     }
   }
 
+  Future<void> _openDailySignInCalendar() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DailySignInCalendarPage(
+          api: widget.api,
+          initialDate: _data?.date,
+        ),
+      ),
+    );
+  }
+
 
   void _message(String message, {bool error = false}) {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -298,7 +310,24 @@ class _TodayPageState extends State<TodayPage> {
                   _errorBanner(_error!),
                   const SizedBox(height: 12),
                 ],
-                DashboardHero(data: data),
+                  Stack(
+                    children: [
+                      DashboardHero(data: data),
+                      Positioned(
+                        top: 4,
+                        right: 38,
+                        child: IconButton(
+                          tooltip: '签到日历',
+                          onPressed: _openDailySignInCalendar,
+                          icon: const Icon(
+                            Icons.calendar_month_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 const SizedBox(height: 14),
                 AssetStrip(assets: data.assets),
                 const SizedBox(height: 29),
@@ -384,7 +413,7 @@ class _TodayPageState extends State<TodayPage> {
         const SizedBox(width: 12),
         _chip('time', '按时间'),
         const SizedBox(width: 8),
-        _chip('importance', '按重要程度'),
+    _chip('importance', '按优先级'),
       ]);
 
   Widget _chip(String value, String label) {
@@ -835,7 +864,7 @@ class _TaskComposerState extends State<TaskComposer> {
   const SizedBox(height: 15),
 
       const SizedBox(height: 15),
-      _rating('重要程度（决定排序）', _importance, (n) => setState(() => _importance = n)),
+      _rating('重要程度（参与优先级计算）', _importance, (n) => setState(() => _importance = n)),
       const SizedBox(height: 9),
       _rating('任务难度（奖励算法后续接入）', _difficulty, (n) => setState(() => _difficulty = n)),
       const SizedBox(height: 12),
