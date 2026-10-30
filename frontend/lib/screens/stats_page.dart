@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../data/stats_api.dart';
 import '../data/today_api.dart';
 import '../theme/app_theme.dart';
+import 'archive_habits_page.dart';
 
 /// 统计页：月历优先，点击日期查看当天任务和习惯；资产趋势放在指标卡片的弹窗中。
 class StatsPage extends StatefulWidget {
@@ -208,10 +209,33 @@ class _StatsPageState extends State<StatsPage> {
         backgroundColor: const Color(0xFFF6F8F5),
         actions: [
           IconButton(
-            onPressed: _loadingStats || _loadingCalendar || _loadingDay
-                ? null : _refreshAll,
+            onPressed:
+            _loadingStats ||
+                _loadingCalendar ||
+                _loadingDay
+                ? null
+                : _refreshAll,
             tooltip: '刷新统计',
-            icon: const Icon(Icons.refresh_rounded),
+            icon: const Icon(
+              Icons.refresh_rounded,
+            ),
+          ),
+
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      ArchiveHabitsPage(
+                        api: widget.api,
+                      ),
+                ),
+              );
+            },
+            tooltip: '归档习惯',
+            icon: const Icon(
+              Icons.archive_outlined,
+            ),
           ),
         ],
       ),
@@ -257,123 +281,206 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   Widget _calendarPanel() {
-    final monthStart = DateTime(_visibleMonth.year, _visibleMonth.month, 1);
-    final daysInMonth = DateTime(_visibleMonth.year, _visibleMonth.month + 1, 0).day;
-    final firstOffset = monthStart.weekday - 1;
-    final cellCount = ((firstOffset + daysInMonth + 6) ~/ 7) * 7;
-    final summaries = _calendar?.byDate ?? const <String, CalendarDaySummary>{};
-    const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+    final monthStart =
+    DateTime(_visibleMonth.year, _visibleMonth.month, 1);
 
-    return _panel(Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(children: [
-          const Icon(Icons.calendar_month_rounded, color: AppColors.forest, size: 21),
-          const SizedBox(width: 7),
-          const Expanded(
-            child: Text('成长日历', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-          ),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: '上个月',
-            onPressed: () => _changeMonth(-1),
-            icon: const Icon(Icons.chevron_left_rounded),
-          ),
-          Text('${_visibleMonth.year}年${_visibleMonth.month}月',
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: '下个月',
-            onPressed: () => _changeMonth(1),
-            icon: const Icon(Icons.chevron_right_rounded),
-          ),
-        ]),
-        if (_loadingCalendar) const LinearProgressIndicator(minHeight: 2),
-        const SizedBox(height: 8),
-        Row(children: weekdays.map((day) => Expanded(
-          child: Center(
-            child: Text(day, style: const TextStyle(
-              color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w600)),
-          ),
-        )).toList()),
-        const SizedBox(height: 6),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: cellCount,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 7,
-            crossAxisSpacing: 4,
-            mainAxisSpacing: 4,
-            childAspectRatio: 1.18,
-          ),
-          itemBuilder: (context, index) {
-            final date = monthStart.add(Duration(days: index - firstOffset));
-            final inMonth = date.month == _visibleMonth.month;
-            final selected = _sameDate(date, _selectedDate);
-            final summary = summaries[_dateKey(date)];
-            final activity = summary?.activityCount ?? 0;
-            final background = selected ? AppColors.forest : _activityColor(activity, inMonth);
-            final foreground = selected
-                ? Colors.white
-                : (inMonth ? const Color(0xFF28342C) : const Color(0xFFB8C0B9));
-            return Material(
-              color: background,
-              borderRadius: BorderRadius.circular(8),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => _selectDate(date),
-                child: Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: selected ? AppColors.forest : const Color(0xFFE8EDE7),
-                      width: selected ? 1.5 : 0.7,
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text('${date.day}', style: TextStyle(
-                        color: foreground, fontSize: 12, fontWeight: selected
-                            ? FontWeight.w800 : FontWeight.w500)),
-                      const SizedBox(height: 2),
-                      if (activity > 0)
-                        Text('$activity', style: TextStyle(
-                          color: selected ? Colors.white : (activity >= 4 ? Colors.white : AppColors.forest),
-                          fontSize: 8, height: 1, fontWeight: FontWeight.w700,
-                        ))
-                      else
-                        const SizedBox(height: 8),
-                    ],
+    final daysInMonth =
+        DateTime(_visibleMonth.year, _visibleMonth.month + 1, 0).day;
+
+    final firstOffset = monthStart.weekday - 1;
+
+    final cellCount =
+        ((firstOffset + daysInMonth + 6) ~/ 7) * 7;
+
+    final summaries =
+        _calendar?.byDate ??
+            const <String, CalendarDaySummary>{};
+
+    const weekdays = [
+      '一',
+      '二',
+      '三',
+      '四',
+      '五',
+      '六',
+      '日',
+    ];
+
+    return _panel(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.calendar_month_rounded,
+                color: AppColors.forest,
+                size: 21,
+              ),
+              const SizedBox(width: 7),
+              const Expanded(
+                child: Text(
+                  '成长日历',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
-            );
-          },
-        ),
-        const SizedBox(height: 9),
-        Row(children: [
-          const Text('少', style: TextStyle(fontSize: 10, color: AppColors.muted)),
-          const SizedBox(width: 5),
-          ...[
-            const Color(0xFFF0F4EF),
-            const Color(0xFFDCEBDD),
-            const Color(0xFFB6D5B9),
-            const Color(0xFF78AE80),
-            AppColors.forest,
-          ].map((color) => Container(
-            margin: const EdgeInsets.only(right: 4),
-            width: 12,
-            height: 12,
-            decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3)),
-          )),
-          const Text('多', style: TextStyle(fontSize: 10, color: AppColors.muted)),
-          const Spacer(),
-          Text('05:00 换日', style: const TextStyle(fontSize: 10, color: AppColors.muted)),
-        ]),
-      ],
-    ));
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: '上个月',
+                onPressed: () => _changeMonth(-1),
+                icon: const Icon(
+                  Icons.chevron_left_rounded,
+                ),
+              ),
+              Text(
+                '${_visibleMonth.year}年'
+                    '${_visibleMonth.month}月',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: '下个月',
+                onPressed: () => _changeMonth(1),
+                icon: const Icon(
+                  Icons.chevron_right_rounded,
+                ),
+              ),
+            ],
+          ),
+
+          if (_loadingCalendar)
+            const LinearProgressIndicator(
+              minHeight: 2,
+            ),
+
+          const SizedBox(height: 8),
+
+          Row(
+            children: weekdays
+                .map(
+                  (day) => Expanded(
+                child: Center(
+                  child: Text(
+                    day,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            )
+                .toList(),
+          ),
+
+          const SizedBox(height: 8),
+
+          GridView.builder(
+            shrinkWrap: true,
+            physics:
+            const NeverScrollableScrollPhysics(),
+            itemCount: cellCount,
+            gridDelegate:
+            const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 7,
+              crossAxisSpacing: 6,
+              mainAxisSpacing: 7,
+
+              // 圆形日期格尽量保持接近正方形
+              childAspectRatio: 1,
+            ),
+            itemBuilder: (context, index) {
+              final date = monthStart.add(
+                Duration(
+                  days: index - firstOffset,
+                ),
+              );
+
+              final inMonth =
+                  date.month == _visibleMonth.month;
+
+              final selected =
+              _sameDate(date, _selectedDate);
+
+              final summary =
+              summaries[_dateKey(date)];
+
+              /*
+             * 完成度只统计：
+             *
+             * 任务
+             * +
+             * 习惯
+             *
+             * 不包含 timeRecords。
+             *
+             * completionRate 范围为 0~1。
+             */
+              final completionRate =
+              inMonth
+                  ? (summary?.completionRate ?? 0.0)
+                  .clamp(0.0, 1.0)
+                  .toDouble()
+                  : 0.0;
+
+              return Center(
+                child: _CalendarDayRing(
+                  day: date.day,
+                  progress: completionRate,
+                  inMonth: inMonth,
+                  selected: selected,
+                  onTap: () =>
+                      _selectDate(date),
+                ),
+              );
+            },
+          ),
+
+          const SizedBox(height: 12),
+
+          Row(
+            children: [
+              // 圆环示例
+              const SizedBox(
+                width: 17,
+                height: 17,
+                child: CustomPaint(
+                  painter:
+                  _CalendarLegendPainter(),
+                ),
+              ),
+
+              const SizedBox(width: 6),
+
+              const Text(
+                '外环表示任务与习惯完成度',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: AppColors.muted,
+                ),
+              ),
+
+              const Spacer(),
+
+              const Text(
+                '05:00 换日',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: AppColors.muted,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _dayDetailPanel() {
@@ -576,6 +683,275 @@ class _StatsPageState extends State<StatsPage> {
   );
 }
 
+class _CalendarDayRing extends StatelessWidget {
+  const _CalendarDayRing({
+    required this.day,
+    required this.progress,
+    required this.inMonth,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final int day;
+
+  /// 0.0 ~ 1.0
+  final double progress;
+
+  final bool inMonth;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 39.0;
+
+    return Material(
+      color: Colors.transparent,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              CustomPaint(
+                size: const Size(
+                  size,
+                  size,
+                ),
+                painter: _CalendarRingPainter(
+                  progress: progress,
+                  inMonth: inMonth,
+                  selected: selected,
+                ),
+              ),
+
+              Text(
+                '$day',
+                style: TextStyle(
+                  color: inMonth
+                      ? const Color(0xFF28342C)
+                      : const Color(0xFFB8C0B9),
+                  fontSize: 12,
+                  fontWeight: selected
+                      ? FontWeight.w800
+                      : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CalendarRingPainter
+    extends CustomPainter {
+  const _CalendarRingPainter({
+    required this.progress,
+    required this.inMonth,
+    required this.selected,
+  });
+
+  final double progress;
+  final bool inMonth;
+  final bool selected;
+
+  @override
+  void paint(
+      Canvas canvas,
+      Size size,
+      ) {
+    final center = Offset(
+      size.width / 2,
+      size.height / 2,
+    );
+
+    /*
+     * 整体尺寸：
+     *
+     * 外圈：完成度
+     * 内圆：固定浅色
+     */
+    final outerRadius =
+        size.shortestSide / 2 - 2.5;
+
+    final innerRadius =
+        outerRadius - 4.5;
+
+    /*
+     * 非当前月份日期降低存在感。
+     */
+    final trackColor = inMonth
+        ? const Color(0xFFDCE7DE)
+        : const Color(0xFFF0F2F0);
+
+    final innerColor = selected
+        ? const Color(0xFFE8F1E9)
+        : inMonth
+        ? const Color(0xFFF6F8F5)
+        : const Color(0xFFFAFBF9);
+
+    /*
+     * 1. 绘制浅色外环底轨
+     */
+    final trackPaint = Paint()
+      ..color = trackColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawCircle(
+      center,
+      outerRadius,
+      trackPaint,
+    );
+
+    /*
+     * 2. 绘制深绿色完成度圆环
+     *
+     * 不再改变颜色深浅。
+     * 完成度通过圆环长度表示。
+     */
+    if (inMonth && progress > 0) {
+      final progressPaint = Paint()
+        ..color = AppColors.forest
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round;
+
+      final rect = Rect.fromCircle(
+        center: center,
+        radius: outerRadius,
+      );
+
+      canvas.drawArc(
+        rect,
+
+        // 从正上方开始
+        -math.pi / 2,
+
+        // 根据完成度决定圆弧长度
+        math.pi * 2 * progress,
+
+        false,
+        progressPaint,
+      );
+    }
+
+    /*
+     * 3. 绘制浅色内圆。
+     *
+     * 日期文字永远位于浅背景上，
+     * 不再因为完成度变化而出现
+     * 白字 / 深色背景问题。
+     */
+    canvas.drawCircle(
+      center,
+      innerRadius,
+      Paint()
+        ..color = innerColor
+        ..style = PaintingStyle.fill,
+    );
+
+    /*
+     * 4. 当前选中日期增加一圈细描边。
+     *
+     * 不改变内部文字颜色。
+     */
+    if (selected) {
+      canvas.drawCircle(
+        center,
+        innerRadius,
+        Paint()
+          ..color = AppColors.forest
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(
+      covariant _CalendarRingPainter oldDelegate,
+      ) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.inMonth != inMonth ||
+        oldDelegate.selected != selected;
+  }
+}
+
+
+class _CalendarLegendPainter
+    extends CustomPainter {
+  const _CalendarLegendPainter();
+
+  @override
+  void paint(
+      Canvas canvas,
+      Size size,
+      ) {
+    final center = Offset(
+      size.width / 2,
+      size.height / 2,
+    );
+
+    final radius =
+        size.shortestSide / 2 - 2;
+
+    /*
+     * 浅色底环
+     */
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = const Color(0xFFDCE7DE)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
+
+    /*
+     * 画大约 70% 的示例完成度
+     */
+    canvas.drawArc(
+      Rect.fromCircle(
+        center: center,
+        radius: radius,
+      ),
+      -math.pi / 2,
+      math.pi * 2 * 0.7,
+      false,
+      Paint()
+        ..color = AppColors.forest
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.round,
+    );
+
+    /*
+     * 浅色内圆
+     */
+    canvas.drawCircle(
+      center,
+      radius - 3,
+      Paint()
+        ..color = const Color(0xFFF6F8F5)
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(
+      covariant CustomPainter oldDelegate,
+      ) =>
+      false;
+}
+
 String _formatClock(DateTime value) =>
     '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
 
@@ -587,14 +963,6 @@ String _formatDuration(int minutes) {
   return '$hours 小时 $rest 分钟';
 }
 
-Color _activityColor(int count, bool inMonth) {
-  if (!inMonth) return const Color(0xFFFAFBF9);
-  if (count <= 0) return const Color(0xFFF4F6F2);
-  if (count == 1) return const Color(0xFFE2EEE2);
-  if (count == 2) return const Color(0xFFC6E0C8);
-  if (count <= 4) return const Color(0xFF8FBE95);
-  return AppColors.forest;
-}
 
 DateTime _businessDate(DateTime dateTime) {
   final date = DateTime(dateTime.year, dateTime.month, dateTime.day);

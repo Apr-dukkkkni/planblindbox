@@ -51,6 +51,24 @@ public interface TaskRecordMapper {
             @Param("recordDate") LocalDate recordDate
     );
 
+
+    /**
+     * 查询用户指定日期范围内的全部任务执行记录。
+     * 包含 IN_PROGRESS 和 COMPLETED。
+     */
+    @Select("""
+        SELECT tr.*
+        FROM task_record tr
+        JOIN task t ON t.task_id = tr.task_id
+        WHERE t.user_id = #{userId}
+          AND tr.record_date BETWEEN #{startDate} AND #{endDate}
+        """)
+    List<TaskRecord> selectByUserIdAndDateRange(
+            @Param("userId") Long userId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
     @Select("""
             SELECT *
             FROM task_record

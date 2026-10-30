@@ -42,6 +42,26 @@ public class HabitController {
         return Result.success(habitService.update(userId, habitId, request));
     }
 
+
+    @GetMapping("/archived")
+    public Result<List<HabitResponse>> getArchived(
+            @RequestParam Long userId
+    ) {
+        return Result.success(
+                habitService.getArchived(userId)
+        );
+    }
+
+    @PutMapping("/{habitId}/restore")
+    public Result<HabitResponse> restore(
+            @PathVariable Long habitId,
+            @RequestParam Long userId
+    ) {
+        return Result.success(
+                habitService.restore(userId, habitId)
+        );
+    }
+
     @DeleteMapping("/{habitId}")
     public Result<Void> archive(@PathVariable Long habitId, @RequestParam Long userId) {
         habitService.archive(userId, habitId);

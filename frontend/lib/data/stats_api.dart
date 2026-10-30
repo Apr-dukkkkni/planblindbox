@@ -300,24 +300,65 @@ class CalendarDaySummary {
     required this.date,
     required this.completedTasks,
     required this.habitCheckIns,
+    required this.totalTasks,
+    required this.totalHabits,
+    required this.completionRate,
     required this.timeRecordCount,
     required this.timeMinutes,
   });
+
   final String date;
+
   final int completedTasks;
   final int habitCheckIns;
+
+  final int totalTasks;
+  final int totalHabits;
+
+  final double completionRate;
+
   final int timeRecordCount;
   final int timeMinutes;
 
-  int get activityCount => completedTasks + habitCheckIns + timeRecordCount;
+  // 时间记录不再参与热力图统计
+  int get activityCount =>
+      completedTasks + habitCheckIns;
 
-  factory CalendarDaySummary.fromJson(Map<String, dynamic> json) => CalendarDaySummary(
-    date: json['date']?.toString() ?? '',
-    completedTasks: _asInt(json['completedTasks']),
-    habitCheckIns: _asInt(json['habitCheckIns']),
-    timeRecordCount: _asInt(json['timeRecordCount']),
-    timeMinutes: _asInt(json['timeMinutes']),
-  );
+  factory CalendarDaySummary.fromJson(
+      Map<String, dynamic> json) {
+
+    final completedTasks =
+    _asInt(json['completedTasks']);
+
+    final habitCheckIns =
+    _asInt(json['habitCheckIns']);
+
+    final totalTasks =
+    _asInt(json['totalTasks']);
+
+    final totalHabits =
+    _asInt(json['totalHabits']);
+
+    final total = totalTasks + totalHabits;
+    final completed = completedTasks + habitCheckIns;
+
+    final rawRate = json['completionRate'];
+
+    final rate = rawRate is num
+        ? rawRate.toDouble()
+        : (total == 0 ? 0.0 : completed / total);
+
+    return CalendarDaySummary(
+      date: json['date']?.toString() ?? '',
+      completedTasks: completedTasks,
+      habitCheckIns: habitCheckIns,
+      totalTasks: totalTasks,
+      totalHabits: totalHabits,
+      completionRate: rate.clamp(0.0, 1.0),
+      timeRecordCount: _asInt(json['timeRecordCount']),
+      timeMinutes: _asInt(json['timeMinutes']),
+    );
+  }
 }
 
 class CalendarDayDetail {

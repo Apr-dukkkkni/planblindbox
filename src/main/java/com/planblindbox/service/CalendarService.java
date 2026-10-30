@@ -52,32 +52,195 @@ public class CalendarService {
     @Transactional(readOnly = true)
     public CalendarMonthResponse getMonth(Long userId, YearMonth month) {
         validateUser(userId);
+
         if (month == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "month 不能为空");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "month 不能为空"
+            );
         }
 
         LocalDate start = month.atDay(1);
         LocalDate end = month.atEndOfMonth();
+
+        // 1. 获取每天已经完成的任务数
         Map<LocalDate, Long> taskCounts = countsByDate(
-                statsMapper.completedTasks(userId, start, end));
+                statsMapper.completedTasks(userId, start, end)
+        );
+
+        // 2. 获取每天已经打卡的习惯数
         Map<LocalDate, Long> habitCounts = countsByDate(
-                statsMapper.completedHabits(userId, start, end));
-        Map<LocalDate, TimeRecordMapper.DailySummary> timeByDate = new HashMap<>();
-        for (TimeRecordMapper.DailySummary summary : timeRecordMapper.selectDailySummaries(userId, start, end)) {
-            if (summary.getDay() != null) timeByDate.put(summary.getDay(), summary);
+                statsMapper.completedHabits(userId, start, end)
+        );
+
+        // 3. 获取时间记录统计（仅展示，不参与完成度）
+        Map<LocalDate, TimeRecordMapper.DailySummary> timeByDate =
+                new HashMap<>();
+
+        for (TimeRecordMapper.DailySummary summary :
+                timeRecordMapper.selectDailySummaries(userId, start, end)) {
+
+            if (summary.getDay() != null) {
+                timeByDate.put(summary.getDay(), summary);
+            }
         }
 
-        List<CalendarMonthResponse.DaySummary> days = new ArrayList<>(month.lengthOfMonth());
-        for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
-            TimeRecordMapper.DailySummary time = timeByDate.get(date);
+        // 4. 获取用户全部任务和习惯
+        List<Task> tasks =
+                taskMapper.selectAllByUserIdForCalendar(userId);
+
+        List<Habit> habits =
+                habitMapper.selectAllByUserIdForCalendar(userId);
+
+        // 5. 批量获取日期范围内的执行记录，避免逐日查询
+        Map<LocalDate, java.util.Set<Long>> taskRecordsByDate =
+                taskRecordIdsByDate(
+                        taskRecordMapper.selectByUserIdAndDateRange(
+                                userId, start, end
+                        )
+                );
+
+        Map<LocalDate, java.util.Set<Long>> habitRecordsByDate =
+                habitRecordIdsByDate(
+                        habitRecordMapper.selectByUserIdAndDateRange(
+                                userId, start, end
+                        )
+                );
+
+        List<CalendarMonthResponse.DaySummary> days =
+                new ArrayList<>(month.lengthOfMonth());
+
+        // 6. 逐日计算完成度
+        for (LocalDate date = start;
+             !date.isAfter(end);
+             date = date.plusDays(1)) {
+
+            java.util.Set<Long> taskIds =
+                    taskRecordsByDate.getOrDefault(
+                            date, java.util.Collections.emptySet()
+                    );
+
+            java.util.Set<Long> habitIds =
+                    habitRecordsByDate.getOrDefault(
+                            date, java.util.Collections.emptySet()
+                    );
+
+            // 已有执行记录的任务，无论当前是否归档，都纳入当天统计。
+            long totalTasks = taskIds.size();
+
+            LocalDateTime dayStart = date.atTime(5, 0);
+            LocalDateTime dayEnd = date.plusDays(1).atTime(5, 0);
+
+            // 没有执行记录，但当天确实安排执行的活动任务。
+            for (Task task : tasks) {
+                if (task.getTaskId() != null
+                        && !taskIds.contains(task.getTaskId())
+                        && isScheduledForBusinessDay(
+                        task, dayStart, dayEnd)) {
+                    totalTasks++;
+                }
+            }
+
+            // 已打卡的习惯计入总数，包括已经归档但保留历史记录的习惯。
+            long totalHabits = habitIds.size();
+
+            // 没有打卡记录，但当天应该执行的活动习惯。
+            for (Habit habit : habits) {
+                if (habit.getHabitId() != null
+                        && !habitIds.contains(habit.getHabitId())
+                        && isScheduled(habit, date)) {
+                    totalHabits++;
+                }
+            }
+
+            // 已完成数量
+            long completedTasks =
+                    taskCounts.getOrDefault(date, 0L);
+
+            long habitCheckIns =
+                    habitCounts.getOrDefault(date, 0L);
+
+            // 完成度：任务 + 习惯
+            long totalCount = totalTasks + totalHabits;
+            long completedCount = completedTasks + habitCheckIns;
+
+            double completionRate = totalCount == 0
+                    ? 0.0
+                    : (double) completedCount / totalCount;
+
+            // 时间记录单独统计
+            TimeRecordMapper.DailySummary time =
+                    timeByDate.get(date);
+
+            long timeRecordCount =
+                    time == null || time.getRecordCount() == null
+                            ? 0L : time.getRecordCount();
+
+            long timeMinutes =
+                    time == null || time.getTotalMinutes() == null
+                            ? 0L : time.getTotalMinutes();
+
             days.add(new CalendarMonthResponse.DaySummary(
                     date,
-                    taskCounts.getOrDefault(date, 0L),
-                    habitCounts.getOrDefault(date, 0L),
-                    time == null || time.getRecordCount() == null ? 0L : time.getRecordCount(),
-                    time == null || time.getTotalMinutes() == null ? 0L : time.getTotalMinutes()));
+                    completedTasks,
+                    habitCheckIns,
+                    totalTasks,
+                    totalHabits,
+                    completionRate,
+                    timeRecordCount,
+                    timeMinutes
+            ));
         }
-        return new CalendarMonthResponse(month.toString(), days);
+
+        return new CalendarMonthResponse(
+                month.toString(),
+                days
+        );
+    }
+
+
+
+    private static Map<LocalDate, java.util.Set<Long>>
+    taskRecordIdsByDate(List<TaskRecord> records) {
+
+        Map<LocalDate, java.util.Set<Long>> result =
+                new HashMap<>();
+
+        for (TaskRecord record : records) {
+            if (record.getRecordDate() == null
+                    || record.getTaskId() == null) {
+                continue;
+            }
+
+            result.computeIfAbsent(
+                    record.getRecordDate(),
+                    key -> new java.util.HashSet<>()
+            ).add(record.getTaskId());
+        }
+
+        return result;
+    }
+
+
+    private static Map<LocalDate, java.util.Set<Long>>
+    habitRecordIdsByDate(List<HabitRecord> records) {
+
+        Map<LocalDate, java.util.Set<Long>> result =
+                new HashMap<>();
+
+        for (HabitRecord record : records) {
+            if (record.getRecordDate() == null
+                    || record.getHabitId() == null) {
+                continue;
+            }
+
+            result.computeIfAbsent(
+                    record.getRecordDate(),
+                    key -> new java.util.HashSet<>()
+            ).add(record.getHabitId());
+        }
+
+        return result;
     }
 
     @Transactional(readOnly = true)

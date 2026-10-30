@@ -88,6 +88,66 @@ public class HabitServiceImpl implements HabitService {
         );
     }
 
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<HabitResponse> getArchived(Long userId) {
+
+        if (userId == null || userId <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "userId 不合法"
+            );
+        }
+
+        return habitMapper.selectArchivedByUserId(userId)
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+
+    @Override
+    @Transactional
+    public HabitResponse restore(Long userId, Long habitId) {
+
+        Habit habit = habitMapper.selectByIdForUpdate(
+                habitId,
+                userId
+        );
+
+        if (habit == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Habit不存在"
+            );
+        }
+
+        if (habit.getStatus() != HabitStatus.ARCHIVED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "该习惯未归档，无需恢复"
+            );
+        }
+
+        if (habitMapper.restore(habitId, userId) != 1) {
+            throw new IllegalStateException("恢复 Habit 失败");
+        }
+
+        Habit restored = habitMapper.selectById(
+                habitId,
+                userId
+        );
+
+        if (restored == null) {
+            throw new IllegalStateException(
+                    "恢复 Habit 后无法读取数据"
+            );
+        }
+
+        return toResponse(restored);
+    }
+
     // ===========================
     // 3. 查询习惯列表
     // ===========================

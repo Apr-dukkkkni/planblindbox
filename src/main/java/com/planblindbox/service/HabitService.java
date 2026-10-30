@@ -12,4 +12,7 @@ public interface HabitService {
     List<HabitResponse> list(Long userId);
     HabitResponse update(Long userId, Long habitId, HabitUpdateRequest request);
     void archive(Long userId, Long habitId);
+    List<HabitResponse> getArchived(Long userId);
+
+    HabitResponse restore(Long userId, Long habitId);
 }

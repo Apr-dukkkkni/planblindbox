@@ -72,4 +72,33 @@ public interface HabitMapper {
             WHERE habit_id = #{habitId} AND user_id = #{userId} AND status <> 'ARCHIVED'
             """)
     int archive(@Param("habitId") Long habitId, @Param("userId") Long userId);
+
+    /**
+     * 查询用户所有已归档习惯。
+     */
+    @Select("""
+        SELECT * FROM habit
+        WHERE user_id = #{userId}
+          AND status = 'ARCHIVED'
+        ORDER BY update_time DESC, habit_id DESC
+        """)
+    List<Habit> selectArchivedByUserId(
+            @Param("userId") Long userId
+    );
+
+    /**
+     * 恢复归档习惯。
+     * 不创建新 Habit，因此原来的 habit_record 全部保留。
+     */
+    @Update("""
+        UPDATE habit
+        SET status = 'ACTIVE'
+        WHERE habit_id = #{habitId}
+          AND user_id = #{userId}
+          AND status = 'ARCHIVED'
+        """)
+    int restore(
+            @Param("habitId") Long habitId,
+            @Param("userId") Long userId
+    );
 }

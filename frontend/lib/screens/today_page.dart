@@ -352,17 +352,42 @@ class _TodayPageState extends State<TodayPage> {
                     ),//点击卡片触发 `_completeTask(task)`
                   )),
                 const SizedBox(height: 18),
-                SectionHeading(title: '每日习惯',
-                    subtitle: '持续行动，比偶尔冲刺更重要',
-                    actionLabel: '新建习惯', onAction: _openHabitCreate),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: _openHabitManagement,
-                    icon: const Icon(Icons.settings_outlined),
-                    label: const Text('管理习惯'),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // 左侧：管理习惯
+                      IconButton(
+                        tooltip: '管理习惯',
+                        onPressed: _openHabitManagement,
+                        icon: const Icon(Icons.settings_outlined),
+                      ),
+
+                      // 中间：标题和副标题
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '每日习惯',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            Text(
+                              '持续行动，比偶尔冲刺更重要',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // 右侧：新建习惯
+                      IconButton(
+                        tooltip: '新建习惯',
+                        onPressed: _openHabitCreate,
+                        icon: const Icon(Icons.add_circle_outline),
+                      ),
+                    ],
                   ),
-                ),
                 const SizedBox(height: 13),
                 if (data.habits.isEmpty)
                   const EmptySection(message: '今天没有计划打卡的习惯', icon: Icons.spa_outlined)

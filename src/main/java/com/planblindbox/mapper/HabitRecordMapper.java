@@ -22,6 +22,23 @@ public interface HabitRecordMapper {
     HabitRecord selectByHabitIdAndDate(@Param("habitId") Long habitId,
                                       @Param("recordDate") LocalDate recordDate);
 
+
+    /**
+     * 查询用户指定日期范围内的全部习惯打卡记录。
+     */
+    @Select("""
+        SELECT hr.*
+        FROM habit_record hr
+        JOIN habit h ON h.habit_id = hr.habit_id
+        WHERE h.user_id = #{userId}
+          AND hr.record_date BETWEEN #{startDate} AND #{endDate}
+        """)
+    List<HabitRecord> selectByUserIdAndDateRange(
+            @Param("userId") Long userId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
     @Select("""
             SELECT hr.*
             FROM habit_record hr

@@ -78,6 +78,31 @@ class HabitApi {
     return data.map((item) => HabitInfo.fromJson(_asMap(item))).toList();
   }
 
+
+  Future<List<HabitInfo>> getArchived() async {
+    final data = await _request(
+      'GET',
+      _url('/habits/archived', includeUser: true),
+    );
+
+    if (data is! List) {
+      throw ApiException('归档习惯列表格式错误');
+    }
+
+    return data
+        .map((item) => HabitInfo.fromJson(_asMap(item)))
+        .toList();
+  }
+
+  Future<HabitInfo> restore(int habitId) async {
+    final data = await _request(
+      'PUT',
+      _url('/habits/$habitId/restore', includeUser: true),
+    );
+
+    return HabitInfo.fromJson(_asMap(data));
+  }
+
   Future<HabitInfo> create({
     required String name,
     required String note,
