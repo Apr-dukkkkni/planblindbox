@@ -192,7 +192,7 @@ class TaskTile extends StatefulWidget {
   final String todayDate;     // 今天日期，用来判断逾期是否是今天逾期
   final bool busy;            // 忙标记：接口请求中，防止重复点击
   final VoidCallback onEdit;
-  final VoidCallback onComplete; // 点击完成的回调（提交给后端）
+  final VoidCallback onComplete; // 点击完成的回调（提交到本地 Repository）
 
   @override
   State<TaskTile> createState() => _TaskTileState();

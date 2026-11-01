@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/shop_api.dart';
 import '../data/collection_api.dart';
 import '../data/today_api.dart';
+import '../data/local/collectible_assets.dart';
 import '../theme/app_theme.dart';
 import '../widgets/dashboard_cards.dart';
 
@@ -32,7 +33,7 @@ class _StorePageState extends State<StorePage> {
   bool _opening = false;
   int? _openingBoxId;
 
-  // 网络错误可能发生在服务器提交事务之后。
+  // 保留请求编号，避免用户连续点击时重复扣款。
   // 因此必须保留 requestId，绝不能在不确定结果时立即生成新的购买请求。
   String? _pendingRequestId;
   int? _pendingBoxId;
@@ -126,7 +127,7 @@ class _StorePageState extends State<StorePage> {
         }
       }
     } catch (_) {
-      // 网络仍不可用时保留原 requestId。
+      // 查询失败时保留原 requestId。
     }
     return null;
   }
@@ -151,7 +152,7 @@ class _StorePageState extends State<StorePage> {
         title: Text(isRetry ? '重试上次开盒' : '确认开启${box.name}'),
         content: Text(isRetry
             ? '将使用相同请求编号再次查询/提交，不会创建新的一笔购买。'
-            : '本次需要消耗 ${box.priceCoin} 金币，奖励由服务器随机决定。'),
+            : '本次需要消耗 ${box.priceCoin} 金币，奖励由本地奖励池随机决定。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -186,7 +187,7 @@ class _StorePageState extends State<StorePage> {
       });
     } catch (error) {
       failureMessage = error.toString();
-      // 即使 POST 返回异常，事务也可能已成功提交；先核对最近记录。
+      // 如果本地提交结果未返回，先核对本地开盒历史。
       result = await _findPendingResult();
     } finally {
       if (mounted) {
@@ -209,7 +210,7 @@ class _StorePageState extends State<StorePage> {
 
   Future<void> _showReward(ShopOpen result) async {
     if (result.rewardType == 'COLLECTIBLE' && result.itemName != null) {
-      // 查询发奖后的真实库存，用于区分首次解锁和重复获得。
+      // 查询本地库存，用于区分首次解锁和重复获得。
       // 查询失败不影响已成功的开盒，只降级显示通用收藏提示。
       final ownedCount = await _getOwnedCountAfter(result)
           .timeout(const Duration(seconds: 3), onTimeout: () => null);
@@ -218,9 +219,7 @@ class _StorePageState extends State<StorePage> {
       final isDuplicate =
           ownedCount != null && ownedCount > result.rewardAmount;
       final imagePath = result.itemImagePath;
-      final imageUrl = imagePath == null || imagePath.isEmpty
-          ? null
-          : Uri.parse(_shopApi.baseUrl).resolve(imagePath).toString();
+      final imageAsset = collectibleAssetPath(imagePath);
 
       await showDialog<void>(
         context: context,
@@ -267,14 +266,14 @@ class _StorePageState extends State<StorePage> {
                     ),
                   ),
                   const SizedBox(height: 15),
-                  if (imageUrl != null)
+                  if (imageAsset.isNotEmpty)
                     ClipRRect(
                       borderRadius: BorderRadius.circular(18),
                       child: SizedBox(
                         width: 190,
                         height: 190,
-                        child: Image.network(
-                          imageUrl,
+                        child: Image.asset(
+                          imageAsset,
                           fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => Container(
                             color: AppColors.paleGreen,
@@ -318,7 +317,7 @@ class _StorePageState extends State<StorePage> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 11, vertical: 5),
                       decoration: BoxDecoration(
-                        color: _rarityColor(result.itemRarity!).withOpacity(0.12),
+                        color: _rarityColor(result.itemRarity!).withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(

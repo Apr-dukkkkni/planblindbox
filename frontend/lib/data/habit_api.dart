@@ -1,106 +1,22 @@
-import 'dart:convert';
+import 'api_exception.dart';
+import 'local/local_database.dart';
+import 'local/local_plan_repository.dart';
 
-import 'package:http/http.dart' as http;
-
-import 'today_api.dart';
-
-/// 复用后端现有 /habits API。这个类只负责 HTTP，不操作本地缓存或奖励。
+/// 习惯本地数据门面：只操作 SQLite，不依赖 Spring Boot。
 class HabitApi {
-  HabitApi({required this.baseUrl, required this.userId, http.Client? client})
-      : _client = client ?? http.Client();
+  HabitApi({required this.baseUrl, required this.userId, LocalPlanRepository? repository})
+      : _repository = repository ?? LocalPlanRepository(
+          userId: userId,
+          localDatabase: LocalDatabase.instance,
+        );
 
   final String baseUrl;
   final int userId;
-  final http.Client _client;
+  final LocalPlanRepository _repository;
 
-  Uri _url(String path, {bool includeUser = false}) =>
-      Uri.parse('$baseUrl$path').replace(
-        queryParameters: includeUser ? {'userId': '$userId'} : null,
-      );
-
-  Future<dynamic> _request(String method, Uri uri, {Object? body}) async {
-    try {
-      final headers = <String, String>{'Accept': 'application/json'};
-      if (body != null) {
-        headers['Content-Type'] = 'application/json; charset=utf-8';
-      }
-
-      late final http.Response response;
-      switch (method) {
-        case 'GET':
-          response = await _client.get(uri, headers: headers)
-              .timeout(const Duration(seconds: 12));
-        case 'POST':
-          response = await _client.post(uri, headers: headers,
-              body: body == null ? null : jsonEncode(body))
-              .timeout(const Duration(seconds: 12));
-        case 'PUT':
-          response = await _client.put(uri, headers: headers,
-              body: body == null ? null : jsonEncode(body))
-              .timeout(const Duration(seconds: 12));
-        case 'DELETE':
-          response = await _client.delete(uri, headers: headers)
-              .timeout(const Duration(seconds: 12));
-        default:
-          throw ApiException('不支持的请求方法：$method');
-      }
-
-      final dynamic decoded;
-      try {
-        decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      } catch (_) {
-        throw ApiException('服务端返回了无法解析的 JSON（HTTP ${response.statusCode}）',
-            statusCode: response.statusCode);
-      }
-      if (decoded is! Map) {
-        throw ApiException('服务端响应格式错误', statusCode: response.statusCode);
-      }
-      final envelope = Map<String, dynamic>.from(decoded);
-      final code = (envelope['code'] as num?)?.toInt();
-      if (response.statusCode < 200 || response.statusCode >= 300 || code != 200) {
-        final message = envelope['message']?.toString() ?? '';
-        throw ApiException(message.isNotEmpty
-            ? message
-            : '请求失败（HTTP ${response.statusCode}）',
-            statusCode: response.statusCode);
-      }
-      return envelope['data'];
-    } on ApiException {
-      rethrow;
-    } on Exception catch (error) {
-      throw ApiException('请求习惯接口失败：$error');
-    }
-  }
-
-  Future<List<HabitInfo>> getAll() async {
-    final data = await _request('GET', _url('/habits', includeUser: true));
-    if (data is! List) throw ApiException('习惯列表格式错误');
-    return data.map((item) => HabitInfo.fromJson(_asMap(item))).toList();
-  }
-
-
-  Future<List<HabitInfo>> getArchived() async {
-    final data = await _request(
-      'GET',
-      _url('/habits/archived', includeUser: true),
-    );
-
-    if (data is! List) {
-      throw ApiException('归档习惯列表格式错误');
-    }
-
-    return data
-        .map((item) => HabitInfo.fromJson(_asMap(item)))
-        .toList();
-  }
-
-  Future<HabitInfo> restore(int habitId) async {
-    final data = await _request(
-      'PUT',
-      _url('/habits/$habitId/restore', includeUser: true),
-    );
-
-    return HabitInfo.fromJson(_asMap(data));
+  Future<List<HabitInfo>> getAll({bool includeArchived = false}) async {
+    final rows = await _repository.getHabits(includeArchived: includeArchived);
+    return rows.map(HabitInfo.fromJson).toList();
   }
 
   Future<HabitInfo> create({
@@ -111,68 +27,47 @@ class HabitApi {
     required int importance,
     required int difficulty,
   }) async {
-    final data = await _request('POST', _url('/habits'), body: {
-      'userId': userId,
-      'name': name,
-      'note': note,
-      'startDate': startDate,
-      'repeatRule': repeatRule,
-      'importance': importance,
-      'difficulty': difficulty,
-    });
-
-    return HabitInfo.fromJson(_asMap(data));
+    final row = await _repository.createHabit(
+      name: name,
+      note: note,
+      startDate: startDate,
+      repeatRule: repeatRule,
+      importance: importance,
+      difficulty: difficulty,
+    );
+    return HabitInfo.fromJson(row);
   }
 
   Future<HabitInfo> update(
-      int habitId, {
-        required String name,
-        required String note,
-        required Map<String, dynamic> repeatRule,
-        required int importance,
-        required int difficulty,
-      }) async {
-    final data = await _request(
-      'PUT',
-      _url('/habits/$habitId', includeUser: true),
-      body: {
-        'name': name,
-        'note': note,
-        'repeatRule': repeatRule,
-        'importance': importance,
-        'difficulty': difficulty,
-      },
+    int habitId, {
+    required String name,
+    required String note,
+    required Map<String, dynamic> repeatRule,
+    required int importance,
+    required int difficulty,
+  }) async {
+    final row = await _repository.updateHabit(
+      habitId,
+      name: name,
+      note: note,
+      repeatRule: repeatRule,
+      importance: importance,
+      difficulty: difficulty,
     );
-
-    return HabitInfo.fromJson(_asMap(data));
+    return HabitInfo.fromJson(row);
   }
 
-  Future<void> setPaused(int habitId, {required bool paused}) async {
-    await _request(
-      'PUT',
-      _url('/habits/$habitId', includeUser: true),
-      body: {'status': paused ? 'PAUSED' : 'ACTIVE'},
-    );
-  }
+  Future<void> setPaused(int habitId, {required bool paused}) =>
+      _repository.setHabitPaused(habitId, paused: paused);
 
-  Future<void> archive(int habitId) async {
-    await _request('DELETE', _url('/habits/$habitId', includeUser: true));
-  }
+  Future<void> archive(int habitId) => _repository.archiveHabit(habitId);
 
-  Future<HabitCheckInStats> getCheckInStats(int habitId) async {
-    final data = await _request(
-      'GET',
-      _url('/habits/$habitId/check-in-status', includeUser: true),
-    );
-    return HabitCheckInStats.fromJson(_asMap(data));
-  }
+  Future<void> restore(int habitId) => _repository.restoreHabit(habitId);
 
-  void dispose() => _client.close();
-}
+  Future<HabitCheckInStats> getCheckInStats(int habitId) async =>
+      HabitCheckInStats.fromJson(await _repository.getHabitCheckInStats(habitId));
 
-Map<String, dynamic> _asMap(dynamic value) {
-  if (value is! Map) throw ApiException('服务端返回的数据不是 JSON 对象');
-  return Map<String, dynamic>.from(value);
+  void dispose() {}
 }
 
 class HabitInfo {

@@ -1,68 +1,27 @@
-import 'dart:convert';
+import 'api_exception.dart';
+import 'local/local_database.dart';
+import 'local/local_plan_repository.dart';
 
-import 'package:http/http.dart' as http;
-
-import 'today_api.dart';
-
+/// 统计、日历和时间记录全部从本地 SQLite 聚合。
 class StatsApi {
-  StatsApi({required this.baseUrl, required this.userId, http.Client? client})
-      : _client = client ?? http.Client();
+  StatsApi({required this.baseUrl, required this.userId, LocalPlanRepository? repository})
+      : _repository = repository ?? LocalPlanRepository(
+          userId: userId,
+          localDatabase: LocalDatabase.instance,
+        );
 
   final String baseUrl;
   final int userId;
-  final http.Client _client;
+  final LocalPlanRepository _repository;
 
-  Future<StatsData> getStats({int days = 7}) async {
-    if (days != 7 && days != 30) {
-      throw ApiException('统计周期只支持 7 天或 30 天');
-    }
-    final uri = Uri.parse('$baseUrl/stats').replace(queryParameters: {
-      'userId': '$userId',
-      'days': '$days',
-    });
-    try {
-      final response = await _client.get(uri, headers: {
-        'Accept': 'application/json',
-      }).timeout(const Duration(seconds: 12));
-      final dynamic parsed;
-      try {
-        parsed = jsonDecode(utf8.decode(response.bodyBytes));
-      } catch (_) {
-        throw ApiException('统计接口响应不是合法 JSON（HTTP ${response.statusCode}）');
-      }
-      if (parsed is! Map) throw ApiException('统计接口响应格式错误');
-      final body = Map<String, dynamic>.from(parsed);
-      if (response.statusCode < 200 || response.statusCode >= 300 ||
-          (body['code'] as num?)?.toInt() != 200) {
-        throw ApiException(body['message']?.toString() ?? '统计数据加载失败');
-      }
-      if (body['data'] is! Map) throw ApiException('统计接口缺少 data 对象');
-      return StatsData.fromJson(Map<String, dynamic>.from(body['data'] as Map));
-    } on ApiException {
-      rethrow;
-    } on Exception catch (error) {
-      throw ApiException('统计接口连接失败：$error');
-    }
-  }
+  Future<StatsData> getStats({int days = 7}) async =>
+      StatsData.fromJson(await _repository.getStats(days: days));
 
-  Future<CalendarMonthData> getCalendarMonth({required DateTime month}) async {
-    final monthText = '${month.year.toString().padLeft(4, '0')}-${month.month.toString().padLeft(2, '0')}';
-    final uri = Uri.parse('$baseUrl/stats/calendar').replace(queryParameters: {
-      'userId': '$userId',
-      'month': monthText,
-    });
-    final data = await _getMap(uri, '日历月度数据');
-    return CalendarMonthData.fromJson(data);
-  }
+  Future<CalendarMonthData> getCalendarMonth({required DateTime month}) async =>
+      CalendarMonthData.fromJson(await _repository.getCalendarMonth(month));
 
-  Future<CalendarDayDetail> getCalendarDay({required String date}) async {
-    final uri = Uri.parse('$baseUrl/stats/calendar/day').replace(queryParameters: {
-      'userId': '$userId',
-      'date': date,
-    });
-    final data = await _getMap(uri, '日期详情');
-    return CalendarDayDetail.fromJson(data);
-  }
+  Future<CalendarDayDetail> getCalendarDay({required String date}) async =>
+      CalendarDayDetail.fromJson(await _repository.getCalendarDay(date));
 
   Future<void> createTimeRecord({
     required String title,
@@ -70,18 +29,14 @@ class StatsApi {
     required DateTime startTime,
     required DateTime endTime,
     String? note,
-  }) async {
-    final uri = Uri.parse('$baseUrl/time-records').replace(queryParameters: {
-      'userId': '$userId',
-    });
-    await _mutate(uri, 'POST', {
-      'title': title,
-      'category': category,
-      'startTime': _formatLocalDateTime(startTime),
-      'endTime': _formatLocalDateTime(endTime),
-      if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
-    }, '创建时间记录');
-  }
+  }) =>
+      _repository.createTimeRecord(
+        title: title,
+        category: category,
+        startTime: startTime,
+        endTime: endTime,
+        note: note,
+      );
 
   Future<void> updateTimeRecord({
     required int recordId,
@@ -91,91 +46,21 @@ class StatsApi {
     required DateTime endTime,
     int? taskId,
     String? note,
-  }) async {
-    final uri = Uri.parse('$baseUrl/time-records/$recordId').replace(queryParameters: {
-      'userId': '$userId',
-    });
-    await _mutate(uri, 'PUT', {
-      'title': title,
-      'category': category,
-      'startTime': _formatLocalDateTime(startTime),
-      'endTime': _formatLocalDateTime(endTime),
-      if (taskId != null) 'taskId': taskId,
-      if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
-    }, '更新时间记录');
-  }
+  }) =>
+      _repository.updateTimeRecord(
+        recordId: recordId,
+        title: title,
+        category: category,
+        startTime: startTime,
+        endTime: endTime,
+        taskId: taskId,
+        note: note,
+      );
 
-  Future<void> deleteTimeRecord({required int recordId}) async {
-    final uri = Uri.parse('$baseUrl/time-records/$recordId').replace(queryParameters: {
-      'userId': '$userId',
-    });
-    await _mutate(uri, 'DELETE', null, '删除时间记录');
-  }
+  Future<void> deleteTimeRecord({required int recordId}) =>
+      _repository.deleteTimeRecord(recordId: recordId);
 
-  Future<void> _mutate(Uri uri, String method, Map<String, dynamic>? body, String label) async {
-    try {
-      final headers = <String, String>{'Accept': 'application/json'};
-      if (body != null) headers['Content-Type'] = 'application/json; charset=utf-8';
-      late final http.Response response;
-      switch (method) {
-        case 'POST':
-          response = await _client.post(uri, headers: headers, body: jsonEncode(body))
-              .timeout(const Duration(seconds: 12));
-        case 'PUT':
-          response = await _client.put(uri, headers: headers, body: jsonEncode(body))
-              .timeout(const Duration(seconds: 12));
-        case 'DELETE':
-          response = await _client.delete(uri, headers: headers)
-              .timeout(const Duration(seconds: 12));
-        default:
-          throw ApiException('不支持的请求方法：$method');
-      }
-      final dynamic parsed;
-      try {
-        parsed = jsonDecode(utf8.decode(response.bodyBytes));
-      } catch (_) {
-        throw ApiException('$label接口响应不是合法 JSON（HTTP ${response.statusCode}）');
-      }
-      if (parsed is! Map) throw ApiException('$label接口响应格式错误');
-      final envelope = Map<String, dynamic>.from(parsed);
-      if (response.statusCode < 200 || response.statusCode >= 300 ||
-          (envelope['code'] as num?)?.toInt() != 200) {
-        throw ApiException(envelope['message']?.toString() ?? '$label失败');
-      }
-    } on ApiException {
-      rethrow;
-    } on Exception catch (error) {
-      throw ApiException('$label失败：$error');
-    }
-  }
-
-  Future<Map<String, dynamic>> _getMap(Uri uri, String label) async {
-    try {
-      final response = await _client.get(uri, headers: {
-        'Accept': 'application/json',
-      }).timeout(const Duration(seconds: 12));
-      final dynamic parsed;
-      try {
-        parsed = jsonDecode(utf8.decode(response.bodyBytes));
-      } catch (_) {
-        throw ApiException('$label接口响应不是合法 JSON（HTTP ${response.statusCode}）');
-      }
-      if (parsed is! Map) throw ApiException('$label接口响应格式错误');
-      final body = Map<String, dynamic>.from(parsed);
-      if (response.statusCode < 200 || response.statusCode >= 300 ||
-          (body['code'] as num?)?.toInt() != 200) {
-        throw ApiException(body['message']?.toString() ?? '$label加载失败');
-      }
-      if (body['data'] is! Map) throw ApiException('$label接口缺少 data 对象');
-      return Map<String, dynamic>.from(body['data'] as Map);
-    } on ApiException {
-      rethrow;
-    } on Exception catch (error) {
-      throw ApiException('$label接口连接失败：$error');
-    }
-  }
-
-  void dispose() => _client.close();
+  void dispose() {}
 }
 
 int _asInt(dynamic v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
@@ -300,65 +185,24 @@ class CalendarDaySummary {
     required this.date,
     required this.completedTasks,
     required this.habitCheckIns,
-    required this.totalTasks,
-    required this.totalHabits,
-    required this.completionRate,
     required this.timeRecordCount,
     required this.timeMinutes,
   });
-
   final String date;
-
   final int completedTasks;
   final int habitCheckIns;
-
-  final int totalTasks;
-  final int totalHabits;
-
-  final double completionRate;
-
   final int timeRecordCount;
   final int timeMinutes;
 
-  // 时间记录不再参与热力图统计
-  int get activityCount =>
-      completedTasks + habitCheckIns;
+  int get activityCount => completedTasks + habitCheckIns + timeRecordCount;
 
-  factory CalendarDaySummary.fromJson(
-      Map<String, dynamic> json) {
-
-    final completedTasks =
-    _asInt(json['completedTasks']);
-
-    final habitCheckIns =
-    _asInt(json['habitCheckIns']);
-
-    final totalTasks =
-    _asInt(json['totalTasks']);
-
-    final totalHabits =
-    _asInt(json['totalHabits']);
-
-    final total = totalTasks + totalHabits;
-    final completed = completedTasks + habitCheckIns;
-
-    final rawRate = json['completionRate'];
-
-    final rate = rawRate is num
-        ? rawRate.toDouble()
-        : (total == 0 ? 0.0 : completed / total);
-
-    return CalendarDaySummary(
-      date: json['date']?.toString() ?? '',
-      completedTasks: completedTasks,
-      habitCheckIns: habitCheckIns,
-      totalTasks: totalTasks,
-      totalHabits: totalHabits,
-      completionRate: rate.clamp(0.0, 1.0),
-      timeRecordCount: _asInt(json['timeRecordCount']),
-      timeMinutes: _asInt(json['timeMinutes']),
-    );
-  }
+  factory CalendarDaySummary.fromJson(Map<String, dynamic> json) => CalendarDaySummary(
+    date: json['date']?.toString() ?? '',
+    completedTasks: _asInt(json['completedTasks']),
+    habitCheckIns: _asInt(json['habitCheckIns']),
+    timeRecordCount: _asInt(json['timeRecordCount']),
+    timeMinutes: _asInt(json['timeMinutes']),
+  );
 }
 
 class CalendarDayDetail {
@@ -460,8 +304,3 @@ class CalendarHabitItem {
   );
 }
 
-String _formatLocalDateTime(DateTime value) {
-  String pad(int n) => n.toString().padLeft(2, '0');
-  return '${value.year}-${pad(value.month)}-${pad(value.day)}T'
-      '${pad(value.hour)}:${pad(value.minute)}:${pad(value.second)}';
-}

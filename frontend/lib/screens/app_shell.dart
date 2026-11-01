@@ -6,9 +6,11 @@ import 'store_page.dart';
 import 'stats_page.dart';
 import 'time_page.dart';
 import 'my_page.dart';
+import 'mod_hub_drawer.dart';
+import '../services/app_preferences.dart';
 
 /// 一级导航容器：今日、时间、商店、统计、我的处于同一层级。
-/// 复用同一个 TodayApi，不重复创建 HTTP Client。
+/// 复用同一个 TodayApi 作为本地核心业务入口。
 class AppShell extends StatefulWidget {
   const AppShell({super.key, required this.api});
 
@@ -19,7 +21,8 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  int _selectedIndex = 0;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  int _selectedIndex = AppPreferences.instance.defaultTabIndex;
   int _todayVersion = 0;
   int _timeVersion = 0;
   int _storeVersion = 0;
@@ -42,59 +45,26 @@ class _AppShellState extends State<AppShell> {
 
       if (!mounted) return;
 
+      // 偏好设置只控制提示，不影响自动签到与奖励发放。
+      if (!AppPreferences.instance.showDailySignInNotice) return;
+
       // 今天已经领取过，不重复提示。
       if (result['granted'] != true) return;
 
       final totalWater = (result['totalWater'] as num?)?.toInt() ?? 0;
 
-      final streakDay = (result['streakDay'] as num?)?.toInt() ?? 1;
+      final streakDay = (result['monthlyStreakDay'] as num?)?.toInt() ??
+          (result['streakDay'] as num?)?.toInt() ??
+          1;
+      final allTimeStreak =
+          (result['allTimeStreakDay'] as num?)?.toInt() ?? streakDay;
 
-      final baseWater =
-          (result['baseWater'] as num?)?.toInt() ?? totalWater;
-
-      final bonusWater =
-          (result['bonusWater'] as num?)?.toInt() ?? 0;
-
-      final waterBalance =
-          (result['waterBalance'] as num?)?.toInt() ?? 0;
-
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          icon: Icon(
-            Icons.water_drop_rounded,
-            size: 42,
-            color: Theme.of(dialogContext).colorScheme.primary,
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '每日签到成功！本月连续第 $streakDay 天，历史连续 $allTimeStreak 天，获得 $totalWater 滴水滴。',
           ),
-          title: const Text(
-            '每日签到成功！',
-            textAlign: TextAlign.center,
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('连续签到第 $streakDay 天'),
-              const SizedBox(height: 14),
-              Text('基础奖励  +$baseWater 水滴'),
-              Text('阶梯奖励  +$bonusWater 水滴'),
-              const Divider(height: 24),
-              Text(
-                '+$totalWater 水滴',
-                style: const TextStyle(
-                  fontSize: 25,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text('当前余额：$waterBalance 水滴'),
-            ],
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('收下奖励'),
-            ),
-          ],
+          duration: const Duration(seconds: 4),
         ),
       );
     } catch (error) {
@@ -125,12 +95,15 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
+      drawer: ModHubDrawer(api: widget.api),
       body: IndexedStack(
         index: _selectedIndex,
         children: [
           TodayPage(
             key: ValueKey('today-$_todayVersion'),
             api: widget.api,
+            onOpenModDrawer: () => _scaffoldKey.currentState?.openDrawer(),
           ),
           TimePage(
             key: ValueKey('time-$_timeVersion'),

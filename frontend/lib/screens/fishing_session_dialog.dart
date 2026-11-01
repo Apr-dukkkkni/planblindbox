@@ -132,12 +132,12 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
         final saved = await _saveTimeRange(
           start,
           catchTime,
-          title: '钓鱼（鱼获第${fishNumber}条）',
+          title: '钓鱼（鱼获第$fishNumber条）',
           note: '连续钓鱼满 ${_catchInterval.inMinutes} 分钟，获得第 $fishNumber 条鱼。',
         );
         if (!saved && mounted) {
           setState(() => _statusMessage =
-              '钓到第 $fishNumber 条鱼了，但时间记录保存失败，请检查后端连接。');
+              '钓到第 $fishNumber 条鱼了，但时间记录保存失败，请检查本地数据库。');
         }
       }
     } finally {
@@ -173,7 +173,7 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
     }
     if (mounted) {
       setState(() {
-        if (!saved) _statusMessage = '$reason（时间记录保存失败，请检查后端连接。）';
+        if (!saved) _statusMessage = '$reason（时间记录保存失败，请检查本地数据库。）';
         _ending = false;
       });
     } else {
@@ -193,7 +193,7 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
       while (cursor.isBefore(end)) {
         final boundary = _nextBusinessBoundary(cursor);
         final pieceEnd = end.isBefore(boundary) ? end : boundary;
-        // 后端要求每条记录至少一分钟，并且不能跨凌晨 05:00 的业务日边界。
+        // 本地规则要求每条记录至少一分钟，并且不能跨凌晨 05:00 的业务日边界。
         if (pieceEnd.difference(cursor).inMinutes >= 1) {
           final isLastPiece = !pieceEnd.isBefore(end);
           await widget.api.createTimeRecord(

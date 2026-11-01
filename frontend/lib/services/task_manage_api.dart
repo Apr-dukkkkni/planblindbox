@@ -1,80 +1,42 @@
+import '../config/api_config.dart';
+import '../data/local/local_database.dart';
+import '../data/local/local_plan_repository.dart';
 
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-
+/// 兼容旧代码的任务管理门面。底层已切换为本地 Repository，不再发送 HTTP 请求。
 class TaskManageApi {
-  static const String baseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:8080',
+  static const int userId = ApiConfig.userId;
+  static final LocalPlanRepository _repository = LocalPlanRepository(
+    userId: userId,
+    localDatabase: LocalDatabase.instance,
   );
 
-  static const int userId = int.fromEnvironment(
-    'USER_ID',
-    defaultValue: 1,
-  );
+  static Future<Map<String, dynamic>> getTask(int taskId) =>
+      _repository.getTask(taskId);
 
-  static Uri taskUri(int taskId) {
-    return Uri.parse(
-      '$baseUrl/tasks/$taskId',
-    ).replace(
-      queryParameters: {
-        'userId': userId.toString(),
-      },
+  static Future<void> updateTask(int taskId, Map<String, dynamic> request) async {
+    final current = await _repository.getTask(taskId);
+    final recordRule = request['recordRule'] is Map
+        ? Map<String, dynamic>.from(request['recordRule'] as Map)
+        : current['recordRule'] is Map
+            ? Map<String, dynamic>.from(current['recordRule'] as Map)
+            : <String, dynamic>{'mode': 'DEFAULT'};
+    final endTimeText = request['endTime']?.toString();
+    await _repository.updateTask(
+      taskId: taskId,
+      title: request['title']?.toString() ?? current['title']?.toString() ?? '',
+      note: request['note']?.toString() ?? current['note']?.toString() ?? '',
+      targetCount: (request['targetCount'] as num?)?.toInt() ??
+          (current['targetCount'] as num?)?.toInt() ?? 1,
+      importance: (request['importance'] as num?)?.toInt() ??
+          (current['importance'] as num?)?.toInt() ?? 3,
+      difficulty: (request['difficulty'] as num?)?.toInt() ??
+          (current['difficulty'] as num?)?.toInt() ?? 3,
+      categoryId: (request['categoryId'] as num?)?.toInt() ??
+          (current['categoryId'] as num?)?.toInt() ?? 0,
+      endTime: endTimeText == null ? null : DateTime.tryParse(endTimeText),
+      recordRule: recordRule,
     );
   }
 
-  static Map<String, dynamic> parseResponse(
-      http.Response response,
-      ) {
-    final json = jsonDecode(
-      utf8.decode(response.bodyBytes),
-    ) as Map<String, dynamic>;
-
-    if (response.statusCode < 200 ||
-        response.statusCode >= 300 ||
-        json['code'] != 200) {
-      throw Exception(
-        json['message'] ?? '任务操作失败',
-      );
-    }
-
-    return json;
-  }
-
-  static Future<Map<String, dynamic>> getTask(
-      int taskId,
-      ) async {
-    final response = await http.get(taskUri(taskId));
-
-    final result = parseResponse(response);
-
-    return Map<String, dynamic>.from(
-      result['data'] as Map,
-    );
-  }
-
-  static Future<void> updateTask(
-      int taskId,
-      Map<String, dynamic> request,
-      ) async {
-    final response = await http.put(
-      taskUri(taskId),
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode(request),
-    );
-
-    parseResponse(response);
-  }
-
-  static Future<void> archiveTask(
-      int taskId,
-      ) async {
-    final response = await http.delete(
-      taskUri(taskId),
-    );
-
-    parseResponse(response);
-  }
+  static Future<void> archiveTask(int taskId) => _repository.archiveTask(taskId);
 }

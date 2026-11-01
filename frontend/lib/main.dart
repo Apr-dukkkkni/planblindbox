@@ -1,12 +1,16 @@
 
 import 'package:flutter/material.dart';
 import 'config/api_config.dart';
+import 'data/local/local_database.dart';
 import 'data/today_api.dart';
 import 'theme/app_theme.dart';
 import 'screens/app_shell.dart';
+import 'services/app_preferences.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await LocalDatabase.instance.initialize();
+  await AppPreferences.instance.load();
   runApp(const PlanBlindBoxApp());
 }
 

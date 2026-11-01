@@ -1,0 +1,14 @@
+server:
+  port: ${MOD_SERVER_PORT:8091}
+spring:
+  application:
+    name: planblindbox-mod-server
+  datasource:
+    url: ${MOD_DB_URL:jdbc:mysql://localhost:3306/plan_mod_market?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${MOD_DB_USER:mod_app}
+    password: ${MOD_DB_PASSWORD:}
+  flyway:
+    enabled: true
+mod:
+  admin-token: ${MOD_ADMIN_TOKEN:}
+  allowed-origins: ${MOD_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}

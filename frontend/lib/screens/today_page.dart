@@ -8,11 +8,11 @@ import 'dart:math';
 import 'task_library_page.dart';
 import 'task_category_page.dart';
 import 'habit_management_page.dart';
-import 'daily_sign_in_calendar_page.dart';
 
 class TodayPage extends StatefulWidget {
-  const TodayPage({super.key, required this.api});
+  const TodayPage({super.key, required this.api, this.onOpenModDrawer});
   final TodayApi api;
+  final VoidCallback? onOpenModDrawer;
 
   @override
   State<TodayPage> createState() => _TodayPageState();
@@ -77,9 +77,9 @@ class _TodayPageState extends State<TodayPage> {
       showDragHandle: true,
       builder: (context) => _RecordCountSheet(task: task),
     );
-    // 3. 用户点了取消（count==null） / 页面已经销毁，直接返回，不发请求
+    // 3. 用户点了取消（count==null） / 页面已经销毁，直接返回，不写入本地数据
     if (count == null || !mounted) return;
-    // 4. 调用封装好的 _execute 函数：上锁 → 调用后端接口 completeTask，参数 taskId + 用户填的数量count
+    // 4. 调用封装好的 _execute 函数：上锁 → 调用本地 Repository 的 completeTask，参数 taskId + 用户填的数量count
     await _execute('task-${task.id}', () => widget.api.completeTask(
           taskId: task.id, actualCount: count));
   }
@@ -96,7 +96,7 @@ class _TodayPageState extends State<TodayPage> {
       task.remainingCount,
     );
 
-    // 3. 通过现有执行流程提交后端
+    // 3. 通过现有执行流程提交到本地数据库
     await _execute(
       'task-${task.id}',
           () => widget.api.completeTask(
@@ -245,17 +245,6 @@ class _TodayPageState extends State<TodayPage> {
     }
   }
 
-  Future<void> _openDailySignInCalendar() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => DailySignInCalendarPage(
-          api: widget.api,
-          initialDate: _data?.date,
-        ),
-      ),
-    );
-  }
-
 
   void _message(String message, {bool error = false}) {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -310,24 +299,7 @@ class _TodayPageState extends State<TodayPage> {
                   _errorBanner(_error!),
                   const SizedBox(height: 12),
                 ],
-                  Stack(
-                    children: [
-                      DashboardHero(data: data),
-                      Positioned(
-                        top: 4,
-                        right: 38,
-                        child: IconButton(
-                          tooltip: '签到日历',
-                          onPressed: _openDailySignInCalendar,
-                          icon: const Icon(
-                            Icons.calendar_month_rounded,
-                            color: Colors.white,
-                            size: 22,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                DashboardHero(data: data),
                 const SizedBox(height: 14),
                 AssetStrip(assets: data.assets),
                 const SizedBox(height: 29),
@@ -352,42 +324,17 @@ class _TodayPageState extends State<TodayPage> {
                     ),//点击卡片触发 `_completeTask(task)`
                   )),
                 const SizedBox(height: 18),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // 左侧：管理习惯
-                      IconButton(
-                        tooltip: '管理习惯',
-                        onPressed: _openHabitManagement,
-                        icon: const Icon(Icons.settings_outlined),
-                      ),
-
-                      // 中间：标题和副标题
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '每日习惯',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            Text(
-                              '持续行动，比偶尔冲刺更重要',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // 右侧：新建习惯
-                      IconButton(
-                        tooltip: '新建习惯',
-                        onPressed: _openHabitCreate,
-                        icon: const Icon(Icons.add_circle_outline),
-                      ),
-                    ],
+                SectionHeading(title: '每日习惯',
+                    subtitle: '持续行动，比偶尔冲刺更重要',
+                    actionLabel: '新建习惯', onAction: _openHabitCreate),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _openHabitManagement,
+                    icon: const Icon(Icons.settings_outlined),
+                    label: const Text('管理习惯'),
                   ),
+                ),
                 const SizedBox(height: 13),
                 if (data.habits.isEmpty)
                   const EmptySection(message: '今天没有计划打卡的习惯', icon: Icons.spa_outlined)
@@ -410,10 +357,17 @@ class _TodayPageState extends State<TodayPage> {
   }
 
   Widget _topBar() => Row(children: [
-        Container(width: 45, height: 45,
-          decoration: BoxDecoration(color: AppColors.paleGreen,
-              borderRadius: BorderRadius.circular(15)),
-          child: const Icon(Icons.eco_rounded, color: AppColors.forest, size: 27)),
+        Tooltip(
+          message: '打开 Mod 侧边栏',
+          child: InkWell(
+            onTap: widget.onOpenModDrawer,
+            borderRadius: BorderRadius.circular(15),
+            child: Container(width: 45, height: 45,
+              decoration: BoxDecoration(color: AppColors.paleGreen,
+                  borderRadius: BorderRadius.circular(15)),
+              child: const Icon(Icons.eco_rounded, color: AppColors.forest, size: 27)),
+          ),
+        ),
         const SizedBox(width: 11),
         const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('PlanBlindBox', style: TextStyle(fontWeight: FontWeight.w900,
@@ -427,8 +381,8 @@ class _TodayPageState extends State<TodayPage> {
           decoration: BoxDecoration(color: Colors.white,
               border: Border.all(color: AppColors.border),
               borderRadius: BorderRadius.circular(12)),
-          child: Text('用户 ${widget.api.userId}',
-              style: const TextStyle(fontSize: 12, color: AppColors.muted))),
+          child: const Text('本地模式',
+              style: TextStyle(fontSize: 12, color: AppColors.muted))),
       ]);
 
   Widget _sortChips() => Row(children: [
@@ -463,18 +417,18 @@ class _TodayPageState extends State<TodayPage> {
   Widget _failure(String error) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 72),
         child: Column(children: [
-          const Icon(Icons.wifi_off_rounded, size: 50, color: AppColors.muted),
+          const Icon(Icons.storage_rounded, size: 50, color: AppColors.muted),
           const SizedBox(height: 16),
-          const Text('还没连接上你的计划',
+          const Text('本地数据暂不可用',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.ink)),
           const SizedBox(height: 9),
           Text(error, textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 12, color: AppColors.muted)),
           const SizedBox(height: 16),
-          FilledButton(onPressed: _load, child: const Text('重新连接')),
+          FilledButton(onPressed: _load, child: const Text('重新加载')),
           const SizedBox(height: 14),
-          Text('接口地址：${widget.api.baseUrl}',
-              style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+          const Text('核心功能使用本机 SQLite 保存，无需启动 Spring Boot。',
+              style: TextStyle(fontSize: 11, color: AppColors.muted)),
         ]),
       );
 
@@ -597,7 +551,7 @@ class _TaskComposerState extends State<TaskComposer> {
     _importance = (detail['importance'] as num?)?.toInt() ?? 3;
     _difficulty = (detail['difficulty'] as num?)?.toInt() ?? 3;
 
-    // 编辑时保留当前截止时间；新建任务默认不指定，交由后端设置为下一个凌晨 05:00。
+    // 编辑时保留当前截止时间；新建任务默认不指定，由本地业务规则设置为下一个凌晨 05:00。
     _end = DateTime.tryParse(detail['endTime']?.toString() ?? '');
 
     // 4. 初始化记录规则
@@ -791,7 +745,7 @@ class _TaskComposerState extends State<TaskComposer> {
           decoration: const InputDecoration(labelText: '备注（可选）')),
       const SizedBox(height: 13),
       DropdownButtonFormField<int>(
-        value: _categoryId,
+        initialValue: _categoryId,
         decoration: InputDecoration(
           labelText: '任务分类',
           helperText: _categoryError == null ? '分类可在任务库中自定义' : '分类加载失败，可重试',

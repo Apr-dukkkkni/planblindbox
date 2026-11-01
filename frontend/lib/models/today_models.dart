@@ -1,4 +1,4 @@
-/// 后端 TodayResponse 的精简强类型映射；后端新增字段不影响旧客户端。
+/// 今日聚合数据的强类型映射；数据来源由 Repository 统一提供。
 class TodayData {
   const TodayData({
     required this.date,

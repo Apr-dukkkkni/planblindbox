@@ -1,120 +1,39 @@
-import 'dart:convert';
 import 'dart:math';
 
-import 'package:http/http.dart' as http;
+import 'api_exception.dart';
+import 'local/local_database.dart';
+import 'local/local_plan_repository.dart';
 
-import 'today_api.dart';
-
-/// 与后端 ShopController 的 Result<T> 格式对应。
+/// 商店本地数据门面：扣款、奖励、收藏品库存和开盒记录由 SQLite 事务保证一致。
 class ShopApi {
-  ShopApi({required this.baseUrl, required this.userId, http.Client? client})
-      : _client = client ?? http.Client();
+  ShopApi({required this.baseUrl, required this.userId, LocalPlanRepository? repository})
+      : _repository = repository ?? LocalPlanRepository(
+          userId: userId,
+          localDatabase: LocalDatabase.instance,
+        );
 
   final String baseUrl;
   final int userId;
-  final http.Client _client;
+  final LocalPlanRepository _repository;
 
-  Uri _url(String path, [Map<String, String>? params]) =>
-      Uri.parse('$baseUrl$path').replace(queryParameters: params);
+  Future<List<ShopBox>> getBoxes() async =>
+      (await _repository.getShopBoxes()).map(ShopBox.fromJson).toList();
 
-  Future<dynamic> _request(String method, Uri uri, {Object? body}) async {
-    try {
-      final headers = <String, String>{'Accept': 'application/json'};
-      if (body != null) {
-        headers['Content-Type'] = 'application/json; charset=utf-8';
-      }
+  Future<ShopBalance> getBalance() async =>
+      ShopBalance.fromJson(await _repository.getShopBalance());
 
-      final http.Response response;
-      switch (method) {
-        case 'GET':
-          response = await _client
-              .get(uri, headers: headers)
-              .timeout(const Duration(seconds: 12));
-        case 'POST':
-          response = await _client
-              .post(uri, headers: headers, body: jsonEncode(body))
-              .timeout(const Duration(seconds: 12));
-        default:
-          throw ApiException('不支持的请求方法：$method');
-      }
+  Future<List<ShopOpen>> getHistory({int limit = 20}) async =>
+      (await _repository.getShopHistory(limit: limit)).map(ShopOpen.fromJson).toList();
 
-      final dynamic decoded;
-      try {
-        decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      } catch (_) {
-        throw ApiException('服务器响应不是合法 JSON（HTTP ${response.statusCode}）',
-            statusCode: response.statusCode);
-      }
-      if (decoded is! Map) {
-        throw ApiException('服务器响应格式不正确', statusCode: response.statusCode);
-      }
-      final envelope = Map<String, dynamic>.from(decoded);
-      final code = (envelope['code'] as num?)?.toInt();
-      if (response.statusCode < 200 ||
-          response.statusCode >= 300 ||
-          code != 200) {
-        final message = envelope['message']?.toString();
-        throw ApiException(
-          (message != null && message.isNotEmpty)
-              ? message
-              : '请求失败（HTTP ${response.statusCode}）',
-          statusCode: response.statusCode,
-        );
-      }
-      return envelope['data'];
-    } on ApiException {
-      rethrow;
-    } on Exception catch (error) {
-      throw ApiException('网络请求失败，请核对后端状态：$error');
-    }
-  }
+  Future<ShopOpen> openBox({required int boxId, required String requestId}) async =>
+      ShopOpen.fromJson(await _repository.openBox(boxId: boxId, requestId: requestId));
 
-  Future<List<ShopBox>> getBoxes() async {
-    final data = await _request('GET', _url('/shop/boxes'));
-    if (data is! List) throw ApiException('商品列表格式错误');
-    return data.map((e) => ShopBox.fromJson(_asMap(e))).toList();
-  }
-
-  Future<ShopBalance> getBalance() async {
-    final data = await _request(
-      'GET',
-      _url('/shop/balance', {'userId': '$userId'}),
-    );
-    return ShopBalance.fromJson(_asMap(data));
-  }
-
-  Future<List<ShopOpen>> getHistory({int limit = 20}) async {
-    final data = await _request('GET', _url('/shop/opens', {
-      'userId': '$userId',
-      'limit': '$limit',
-    }));
-    if (data is! List) throw ApiException('开盒历史格式错误');
-    return data.map((e) => ShopOpen.fromJson(_asMap(e))).toList();
-  }
-
-  Future<ShopOpen> openBox({
-    required int boxId,
-    required String requestId,
-  }) async {
-    final data = await _request(
-      'POST',
-      _url('/shop/boxes/$boxId/open', {'userId': '$userId'}),
-      body: {'requestId': requestId},
-    );
-    return ShopOpen.fromJson(_asMap(data));
-  }
-
-  void dispose() => _client.close();
-}
-
-Map<String, dynamic> _asMap(dynamic value) {
-  if (value is! Map) throw ApiException('服务器返回的数据格式错误');
-  return Map<String, dynamic>.from(value);
+  void dispose() {}
 }
 
 int _integer(dynamic value) {
   if (value is num) return value.toInt();
-  throw ApiException('服务器返回的数字字段格式错误');
+  throw ApiException('本地商店数据中的数字字段格式错误');
 }
 
 int? _nullableInteger(dynamic value) {
@@ -188,7 +107,7 @@ class ShopOpen {
   final int rewardAmount;
   final ShopBalance balance;
 
-  // COLLECTIBLE 奖励由后端附带收藏品详情；数值奖励时这些字段为空。
+  // COLLECTIBLE 奖励由本地开盒记录附带收藏品详情；数值奖励时这些字段为空。
   final int? itemId;
   final String? itemName;
   final String? itemRarity;

@@ -1,18 +1,6 @@
-import 'package:flutter/foundation.dart';
-
-/// 可在启动时通过 --dart-define=API_BASE_URL=http://... 覆盖。
-/// Android 模拟器通过 10.0.2.2 访问电脑 localhost，Windows/macOS 桌面使用 localhost。
+/// Mobile V1 核心功能不再使用 HTTP 后端。
+/// userId 暂时作为本机数据分区标识，登录/多用户以后再接入在线扩展层。
 class ApiConfig {
-  static const configuredBaseUrl = String.fromEnvironment('API_BASE_URL');
   static const userId = int.fromEnvironment('USER_ID', defaultValue: 1);
-
-  static String get baseUrl {
-    if (configuredBaseUrl.trim().isNotEmpty) {
-      return configuredBaseUrl.replaceAll(RegExp(r'/$'), '');
-    }
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8080';
-    }
-    return 'http://localhost:8080';
-  }
+  static const baseUrl = 'local://sqlite';
 }

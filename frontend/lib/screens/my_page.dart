@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../data/today_api.dart';
 import '../models/today_models.dart';
 import 'collection_page.dart';
+import 'settings_page.dart';
 
 /// 「我的」一级页面。
-/// 资产来自现有 /today 接口；等级与收藏系统在后续版本接入。
+/// 资产来自本地 SQLite；等级与成长系统在后续版本接入。
 class MyPage extends StatefulWidget {
   const MyPage({
     super.key,
@@ -183,9 +184,9 @@ class _MyPageState extends State<MyPage> {
               icon: Icons.settings_outlined,
               iconColor: _muted,
               title: '设置',
-              subtitle: '应用偏好与个人设置',
-              trailingLabel: '后续接入',
-              onTap: null,
+              subtitle: '本地备份、数据恢复与应用偏好',
+              trailingLabel: '管理设置',
+              onTap: _openSettings,
             ),
           ],
         ),
@@ -216,9 +217,9 @@ class _MyPageState extends State<MyPage> {
               width: 58,
               height: 58,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.16),
+                color: Colors.white.withValues(alpha: 0.16),
                 borderRadius: BorderRadius.circular(19),
-                border: Border.all(color: Colors.white.withOpacity(0.25)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
               ),
               child: const Icon(
                 Icons.person_outline_rounded,
@@ -323,7 +324,7 @@ class _MyPageState extends State<MyPage> {
               width: 42,
               height: 42,
               decoration: BoxDecoration(
-                color: const Color(0xFF8974B5).withOpacity(0.12),
+                color: const Color(0xFF8974B5).withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: const Icon(Icons.auto_awesome_rounded,
@@ -392,7 +393,7 @@ class _MyPageState extends State<MyPage> {
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: iconColor.withOpacity(0.10),
+                    color: iconColor.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(icon, color: iconColor, size: 22),
@@ -442,5 +443,17 @@ class _MyPageState extends State<MyPage> {
         builder: (_) => CollectionPage(api: widget.api),
       ),
     );
+  }
+
+  void _openSettings() {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => SettingsPage(api: widget.api),
+          ),
+        )
+        .then((_) {
+          if (mounted) _load();
+        });
   }
 }

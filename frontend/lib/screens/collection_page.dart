@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/collection_api.dart';
 import '../data/today_api.dart';
+import '../data/local/collectible_assets.dart';
 
 class CollectionPage extends StatefulWidget {
   const CollectionPage({super.key, required this.api});
@@ -51,9 +52,7 @@ class _CollectionPageState extends State<CollectionPage> {
       final packs = await _collectionApi.getPacks();
       if (!mounted || sequence != _requestSequence) return;
 
-      // 后端已确认存在 butterfly-pack（packId=1）。
-      // 如果列表接口意外返回空数组，仍展示该系列入口；
-      // 具体 12 张藏品仍通过 /collection/packs/1/items 从后端读取。
+      // 本地数据库预置蝴蝶图鉴；如果本地内容包为空，保留一个入口作为防御性兜底。
       final visiblePacks = packs.isEmpty
           ? const [
               CollectionPack(
@@ -138,7 +137,7 @@ class _CollectionPageState extends State<CollectionPage> {
                   border: Border.all(color: const Color(0xFFEAD8A6)),
                 ),
                 child: const Text(
-                  '已显示蝴蝶图鉴入口；系列列表接口暂未返回内容，点开后仍会读取服务器中的真实藏品数据。',
+                  '当前显示内置蝴蝶图鉴入口；本地内容数据尚未初始化完成。',
                   style: TextStyle(
                     color: Color(0xFF80652D),
                     fontSize: 11,
@@ -250,7 +249,7 @@ class _CollectionPageState extends State<CollectionPage> {
             child: LinearProgressIndicator(
               value: progress,
               minHeight: 7,
-              backgroundColor: Colors.white.withOpacity(0.2),
+              backgroundColor: Colors.white.withValues(alpha: 0.2),
               valueColor: const AlwaysStoppedAnimation(Color(0xFFEAD8A6)),
             ),
           ),
@@ -614,7 +613,7 @@ class _CollectionPackPageState extends State<CollectionPackPage> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 5),
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.65),
+                            color: Colors.black.withValues(alpha: 0.65),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
@@ -691,10 +690,9 @@ class _CollectionPackPageState extends State<CollectionPackPage> {
         ),
       );
     }
-    final base = Uri.parse(widget.api.baseUrl);
-    final imageUri = base.resolve(imagePath);
-    return Image.network(
-      imageUri.toString(),
+    final assetPath = collectibleAssetPath(imagePath);
+    return Image.asset(
+      assetPath,
       fit: BoxFit.cover,
       errorBuilder: (_, __, ___) => const ColoredBox(
         color: Color(0xFFE8EDE8),
@@ -755,7 +753,7 @@ class _CollectionPackPageState extends State<CollectionPackPage> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: (item.owned ? rarity : _muted).withOpacity(0.10),
+                    color: (item.owned ? rarity : _muted).withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(

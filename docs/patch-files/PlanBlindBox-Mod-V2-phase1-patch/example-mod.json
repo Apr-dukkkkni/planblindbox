@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.reading",
+  "name": "阅读挑战模板",
+  "version": "1.0.0",
+  "description": "为个人成长计划软件提供一个可以主动创建的阅读任务模板。",
+  "permissions": ["tasks.create"],
+  "dependencies": [],
+  "taskTemplates": [
+    {"title": "今日阅读十页", "note": "记录今天的阅读进度", "targetCount": 10, "importance": 3, "difficulty": 2},
+    {"title": "整理一篇读书笔记", "note": "记录核心收获", "targetCount": 1, "importance": 4, "difficulty": 3}
+  ]
+}

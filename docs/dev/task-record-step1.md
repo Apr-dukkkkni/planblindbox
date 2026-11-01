@@ -13,7 +13,7 @@
 
 ## 如何验证
 
-先确认本地 `plan_blind_box` 库已执行 `docs/database/source/table1012.sql` 中建表 SQL。
+先确认本地 `plan_blind_box` 库已执行 `../../sql/table1012.sql` 中建表 SQL。
 
 Windows 终端（项目根目录）：
 
