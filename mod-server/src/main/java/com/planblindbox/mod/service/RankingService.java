@@ -24,10 +24,14 @@ public class RankingService {
     private static final String KEY = "plan:mod:downloads:all";
     private static final String SQL_LEADERBOARD = """
         SELECT p.mod_id AS id, p.name, p.description, p.latest_version AS latestVersion,
-               COUNT(e.id) AS downloads
-          FROM mod_packages p LEFT JOIN mod_download_events e ON e.mod_id = p.mod_id
+               COALESCE(d.downloads, 0) AS downloads
+          FROM mod_packages p
+          LEFT JOIN (
+              SELECT mod_id, COUNT(*) AS downloads
+                FROM mod_download_events
+               GROUP BY mod_id
+          ) d ON d.mod_id = p.mod_id
          WHERE p.enabled = TRUE
-         GROUP BY p.mod_id, p.name, p.description, p.latest_version
          ORDER BY downloads DESC, p.mod_id ASC LIMIT ?
         """;
     private static final DefaultRedisScript<Long> SET_MAX = new DefaultRedisScript<>(
