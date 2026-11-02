@@ -16,6 +16,8 @@ dependencies:
   sqflite_common_ffi_web: ^1.0.2
   file_picker: ^8.1.7
   file_saver: ^0.4.0
+  flutter_secure_storage: ^9.2.4
+
 
 dev_dependencies:
   flutter_test:

@@ -8,6 +8,8 @@ import 'dart:math';
 import 'task_library_page.dart';
 import 'task_category_page.dart';
 import 'habit_management_page.dart';
+import '../services/cloud_archive_service.dart';
+import 'cloud_archive_pages.dart';
 
 class TodayPage extends StatefulWidget {
   const TodayPage({super.key, required this.api, this.onOpenModDrawer});
@@ -17,6 +19,23 @@ class TodayPage extends StatefulWidget {
   @override
   State<TodayPage> createState() => _TodayPageState();
 }
+
+
+
+class TodayPage extends StatefulWidget {
+  const TodayPage({
+    super.key,
+    required this.api,
+    this.archiveController,
+  });
+
+  final TodayApi api;
+  final CloudArchiveController? archiveController;
+
+  @override
+  State<TodayPage> createState() => _TodayPageState();
+}
+
 
 class _TodayPageState extends State<TodayPage> {
   TodayData? _data;
@@ -170,6 +189,55 @@ class _TodayPageState extends State<TodayPage> {
   }
 
 
+  Future<void> _openTaskLibrary() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TaskLibraryPage(
+          api: widget.api,
+          onEditTask: _editTaskFromLibrary,
+        ),
+      ),
+    );
+
+    // 从任务库返回后，重新读取首页数据
+    if (mounted) {
+      await _load();
+    }
+  }
+
+
+
+
+  Future<void> _openArchive() async {
+    final archive = widget.archiveController;
+
+    if (archive == null) {
+      _message('请先接入本地备份服务');
+      return;
+    }
+
+    try {
+      final restored = await openCloudArchive(
+        context,
+        archive,
+      );
+
+      if (restored && mounted) {
+        await _load();
+      }
+    } catch (error) {
+      if (mounted) {
+        _message(
+          '存档功能暂不可用：$error',
+          error: true,
+        );
+      }
+    }
+  }
+
+
+
+
 
   Future<bool> _editTaskFromLibrary(int taskId) async {
     try {
@@ -269,23 +337,6 @@ class _TodayPageState extends State<TodayPage> {
             padding: const EdgeInsets.fromLTRB(20, 15, 20, 35),
             children: [
               _topBar(),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  icon: const Icon(Icons.folder_outlined),
-                  label: const Text('我的任务库'),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => TaskLibraryPage(
-                          api: widget.api,
-                          onEditTask: _editTaskFromLibrary,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
               const SizedBox(height: 18),
               if (_loading && data != null)
                 const LinearProgressIndicator(minHeight: 2, color: AppColors.leaf),
@@ -356,34 +407,70 @@ class _TodayPageState extends State<TodayPage> {
     );
   }
 
-  Widget _topBar() => Row(children: [
-        Tooltip(
-          message: '打开 Mod 侧边栏',
-          child: InkWell(
-            onTap: widget.onOpenModDrawer,
-            borderRadius: BorderRadius.circular(15),
-            child: Container(width: 45, height: 45,
-              decoration: BoxDecoration(color: AppColors.paleGreen,
-                  borderRadius: BorderRadius.circular(15)),
-              child: const Icon(Icons.eco_rounded, color: AppColors.forest, size: 27)),
-          ),
+
+  Widget _topBar() => Row(
+    children: [
+      Container(
+        width: 45,
+        height: 45,
+        decoration: BoxDecoration(
+          color: AppColors.paleGreen,
+          borderRadius: BorderRadius.circular(15),
         ),
-        const SizedBox(width: 11),
-        const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('PlanBlindBox', style: TextStyle(fontWeight: FontWeight.w900,
-              color: AppColors.ink, fontSize: 19)),
-          Text('让成长变得看得见', style: TextStyle(color: AppColors.muted, fontSize: 12)),
-        ])),
-        IconButton(onPressed: _loading ? null : _load,
-          tooltip: '刷新今日数据',
-          icon: const Icon(Icons.refresh_rounded, color: AppColors.forest)),
-        Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-          decoration: BoxDecoration(color: Colors.white,
-              border: Border.all(color: AppColors.border),
-              borderRadius: BorderRadius.circular(12)),
-          child: const Text('本地模式',
-              style: TextStyle(fontSize: 12, color: AppColors.muted))),
-      ]);
+        child: const Icon(
+          Icons.eco_rounded,
+          color: AppColors.forest,
+          size: 27,
+        ),
+      ),
+
+      const SizedBox(width: 11),
+
+      const Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'PlanBlindBox',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                color: AppColors.ink,
+                fontSize: 19,
+              ),
+            ),
+            Text(
+              '让成长变得看得见',
+              style: TextStyle(
+                color: AppColors.muted,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+
+      // 原刷新按钮 -> 存档
+      IconButton(
+        tooltip: '云端存档',
+        onPressed: _openArchive,
+        icon: const Icon(
+          Icons.cloud_upload_outlined,
+          color: AppColors.forest,
+        ),
+      ),
+
+      // 任务库放到存档右侧
+      IconButton(
+        tooltip: '我的任务库',
+        onPressed: _openTaskLibrary,
+        icon: const Icon(
+          Icons.folder_open_outlined,
+          color: AppColors.forest,
+        ),
+      ),
+    ],
+  );
+
 
   Widget _sortChips() => Row(children: [
         const Icon(Icons.swap_vert_rounded, color: AppColors.muted, size: 18),

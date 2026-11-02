@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 # PlanBlindBox ranking benchmark runner (Windows PowerShell 5.1 compatible).
 # No DDL, grants, deletes, imports, or changes to other services.
 param(
@@ -22,6 +22,7 @@ if (-not (Test-Path (Join-Path $serverDir 'pom.xml'))) {
     throw "Missing mod-server/pom.xml under $root"
 }
 if (-not (Test-Path $k6Script)) { throw 'Missing ranking-mysql-load.js next to this script.' }
+if (-not (Test-Path (Join-Path $perfDir 'write-ranking-report.ps1'))) { throw 'Missing write-ranking-report.ps1 next to this script.' }
 foreach ($program in @('mvn', 'java', 'docker', 'curl.exe')) {
     if (-not (Get-Command $program -ErrorAction SilentlyContinue)) {
         throw "Missing required command: $program"
@@ -134,40 +135,21 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "k6 exited with code $LASTEXITCODE." }
     if (-not (Test-Path $summaryPath)) { throw "k6 summary not found: $summaryPath" }
 
-    $summary = Get-Content -Path $summaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $metrics = $summary.metrics
-    $avgMs = [math]::Round([double]$metrics.http_req_duration.values.avg, 2)
-    $p95Ms = [math]::Round([double]$metrics.http_req_duration.values.'p(95)', 2)
-    $requestCount = $metrics.http_reqs.values.count
-    $qps = [math]::Round([double]$metrics.http_reqs.values.rate, 2)
-    $errorPct = [math]::Round([double]$metrics.http_req_failed.values.rate * 100, 3)
-
-    $lines = @(
-        '# PlanBlindBox ranking benchmark',
-        '',
-        "- Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
-        "- Database: $Database",
-        "- Stages: 4 x ${StageSeconds}s; peak VUs: $VUs; pause: ${SleepSeconds}s; limit: $Limit",
-        "- Requests: $requestCount",
-        "- Average: $avgMs ms",
-        "- P95: $p95Ms ms",
-        "- QPS: $qps",
-        "- HTTP failure rate: $errorPct%"
-    )
-    if (-not [string]::IsNullOrWhiteSpace($BaselineJson)) {
-        $baseline = Get-Content -Path $BaselineJson -Raw -Encoding UTF8 | ConvertFrom-Json
-        $baselineP95 = [double]$baseline.metrics.http_req_duration.values.'p(95)'
-        $baselineQps = [double]$baseline.metrics.http_reqs.values.rate
-        if ($baselineP95 -gt 0) {
-            $lines += "- P95 vs baseline: $([math]::Round($p95Ms / $baselineP95, 2)) x (lower is better)"
-        }
-        if ($baselineQps -gt 0) {
-            $lines += "- QPS vs baseline: $([math]::Round($qps / $baselineQps, 2)) x (higher is better)"
-        }
+    Write-Host 'Generating validated report...'
+    $reportArgs = @{
+        SummaryPath = $summaryPath
+        Database = $Database
+        StageSeconds = $StageSeconds
+        VUs = $VUs
+        Limit = $Limit
+        SleepSeconds = $SleepSeconds
     }
-    $lines | Set-Content -Path $reportPath -Encoding UTF8
-    Write-Host "`nReport saved: $reportPath"
-    $lines | ForEach-Object { Write-Host $_ }
+    if (-not [string]::IsNullOrWhiteSpace($BaselineJson)) {
+        $reportArgs['BaselineJson'] = $BaselineJson
+    }
+    & (Join-Path $perfDir 'write-ranking-report.ps1') @reportArgs
+    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Report generator failed: $LASTEXITCODE" }
+
 }
 finally {
     if (($null -ne $serverProcess) -and (-not $serverProcess.HasExited)) {

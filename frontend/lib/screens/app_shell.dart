@@ -8,13 +8,19 @@ import 'time_page.dart';
 import 'my_page.dart';
 import 'mod_hub_drawer.dart';
 import '../services/app_preferences.dart';
+import '../services/cloud_archive_service.dart';
 
 /// 一级导航容器：今日、时间、商店、统计、我的处于同一层级。
 /// 复用同一个 TodayApi 作为本地核心业务入口。
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.api});
+  const AppShell({
+    super.key,
+    required this.api,
+    this.archiveController,
+  });
 
   final TodayApi api;
+  final CloudArchiveController? archiveController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -47,6 +53,12 @@ class _AppShellState extends State<AppShell> {
 
       // 偏好设置只控制提示，不影响自动签到与奖励发放。
       if (!AppPreferences.instance.showDailySignInNotice) return;
+
+      if (result['granted'] == true) {
+        setState(() {
+          _todayVersion++;
+        });
+      }
 
       // 今天已经领取过，不重复提示。
       if (result['granted'] != true) return;
@@ -103,6 +115,7 @@ class _AppShellState extends State<AppShell> {
           TodayPage(
             key: ValueKey('today-$_todayVersion'),
             api: widget.api,
+            archiveController: widget.archiveController,
             onOpenModDrawer: () => _scaffoldKey.currentState?.openDrawer(),
           ),
           TimePage(

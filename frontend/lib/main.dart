@@ -6,6 +6,7 @@ import 'data/today_api.dart';
 import 'theme/app_theme.dart';
 import 'screens/app_shell.dart';
 import 'services/app_preferences.dart';
+import 'services/cloud_archive_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,10 +28,30 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
     userId: ApiConfig.userId,
   );
 
+
+  late final CloudArchiveController _archive =
+  CloudArchiveController(
+    bridge: ArchiveDataBridge(
+      exportJson: () async {
+        throw StateError(
+          '尚未接入本地备份导出函数',
+        );
+      },
+
+      restoreJson: (backupJson) async {
+        throw StateError(
+          '尚未接入本地备份恢复函数',
+        );
+      },
+    ),
+  );
+
+
   @override
   void dispose() {
     _api.dispose();
     super.dispose();
+    _archive.diapose();
   }
 
   @override
@@ -74,7 +95,9 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
                       : const [],
                 ),
                 // 注意：使用已经定义好的 _api
-                child: AppShell(api: _api),
+                child: AppShell(api: _api,
+                archiveController:_archive,
+                ),
               ),
             ),
           );
