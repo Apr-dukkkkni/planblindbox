@@ -1,0 +1,27 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::                (v3.2.5)
+
+2026-11-02T19:22:15.783+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] c.planblindbox.mod.ModServerApplication  : Starting ModServerApplication v0.2.0 using Java 21.0.12.1 with PID 30096 (E:\CODE\code\PlanBlindBox\mod-server\target\mod-server-0.2.0.jar started by Administrator in E:\CODE\code\PlanBlindBox\mod-server)
+2026-11-02T19:22:15.785+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] c.planblindbox.mod.ModServerApplication  : No active profile set, falling back to 1 default profile: "default"
+2026-11-02T19:22:16.540+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-11-02T19:22:16.542+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-11-02T19:22:16.563+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 10 ms. Found 0 Redis repository interfaces.
+2026-11-02T19:22:17.065+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8092 (http)
+2026-11-02T19:22:17.077+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-11-02T19:22:17.077+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.20]
+2026-11-02T19:22:17.108+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-11-02T19:22:17.109+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1262 ms
+2026-11-02T19:22:18.018+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8092 (http) with context path ''
+2026-11-02T19:22:18.032+08:00  INFO 30096 --- [planblindbox-mod-server] [           main] c.planblindbox.mod.ModServerApplication  : Started ModServerApplication in 2.64 seconds (process running for 3.092)
+2026-11-02T19:22:18.355+08:00  INFO 30096 --- [planblindbox-mod-server] [0.1-8092-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-11-02T19:22:18.355+08:00  INFO 30096 --- [planblindbox-mod-server] [0.1-8092-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-11-02T19:22:18.356+08:00  INFO 30096 --- [planblindbox-mod-server] [0.1-8092-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 0 ms
+2026-11-02T19:22:18.383+08:00  INFO 30096 --- [planblindbox-mod-server] [0.1-8092-exec-1] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-11-02T19:22:18.593+08:00  INFO 30096 --- [planblindbox-mod-server] [0.1-8092-exec-1] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection com.mysql.cj.jdbc.ConnectionImpl@4dfa10a7
+2026-11-02T19:22:18.595+08:00  INFO 30096 --- [planblindbox-mod-server] [0.1-8092-exec-1] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.

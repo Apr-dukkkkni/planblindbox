@@ -10,31 +10,30 @@ import 'task_category_page.dart';
 import 'habit_management_page.dart';
 import '../services/cloud_archive_service.dart';
 import 'cloud_archive_pages.dart';
-
-class TodayPage extends StatefulWidget {
-  const TodayPage({super.key, required this.api, this.onOpenModDrawer});
-  final TodayApi api;
-  final VoidCallback? onOpenModDrawer;
-
-  @override
-  State<TodayPage> createState() => _TodayPageState();
-}
-
+import '../data/wellbeing_repository.dart';
+import 'wellbeing_pages.dart';
 
 
 class TodayPage extends StatefulWidget {
   const TodayPage({
     super.key,
     required this.api,
+    this.onOpenModDrawer,
     this.archiveController,
+    this.isFemale = false,
+    this.wellbeingUserId = -1,
   });
 
   final TodayApi api;
+  final VoidCallback? onOpenModDrawer;
   final CloudArchiveController? archiveController;
+  final bool isFemale;
+  final int wellbeingUserId;
 
   @override
   State<TodayPage> createState() => _TodayPageState();
 }
+
 
 
 class _TodayPageState extends State<TodayPage> {
@@ -143,19 +142,6 @@ class _TodayPageState extends State<TodayPage> {
     await _execute('habit-${habit.id}', () => widget.api.checkInHabit(habit.id));
   }
 
-  Future<void> _createTask() async {
-    final succeeded = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => TaskComposer(api: widget.api),
-    );
-    if (succeeded == true && mounted) {
-      _message('新任务创建成功');
-      await _load();
-    }
-  }
-
   Future<void> _editTask(TodayTask task) async {
     if (task.overdue) {
       _message('任务已逾期，请使用重新安排功能');
@@ -212,7 +198,7 @@ class _TodayPageState extends State<TodayPage> {
     final archive = widget.archiveController;
 
     if (archive == null) {
-      _message('请先接入本地备份服务');
+      _message('云存档控制器尚未初始化', error: true);
       return;
     }
 
@@ -227,10 +213,7 @@ class _TodayPageState extends State<TodayPage> {
       }
     } catch (error) {
       if (mounted) {
-        _message(
-          '存档功能暂不可用：$error',
-          error: true,
-        );
+        _message('打开存档失败：$error', error: true);
       }
     }
   }
@@ -290,29 +273,16 @@ class _TodayPageState extends State<TodayPage> {
     }
   }
 
-  Future<void> _openHabitCreate() async {
-    final businessDate = _data?.date;
-
-    if (businessDate == null) {
-      _message('今日数据尚未加载', error: true);
-      return;
-    }
-
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => HabitManagementPage(
-          api: widget.api,
-          businessDate: businessDate,
-          autoCreate: true,
-        ),
+  Future<void> _openCalendar() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => WellbeingCalendarDialog(
+        repository: WellbeingRepository(
+          userId: widget.wellbeingUserId, signInUserId: widget.api.userId),
+        isFemale: widget.isFemale,
       ),
     );
-
-    if (mounted) {
-      await _load();
-    }
   }
-
 
   void _message(String message, {bool error = false}) {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -323,104 +293,204 @@ class _TodayPageState extends State<TodayPage> {
     ));
   }
 
+
   @override
   Widget build(BuildContext context) {
     final data = _data;
+
     return Scaffold(
-      body: SafeArea(child: Center(child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760),
-        child: RefreshIndicator(
-          color: AppColors.forest,
-          onRefresh: _load,
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(20, 15, 20, 35),
-            children: [
-              _topBar(),
-              const SizedBox(height: 18),
-              if (_loading && data != null)
-                const LinearProgressIndicator(minHeight: 2, color: AppColors.leaf),
-              if (_loading && data == null)
-                const Padding(padding: EdgeInsets.symmetric(vertical: 100),
-                    child: Center(child: CircularProgressIndicator()))
-              else if (data == null)
-                _failure(_error ?? '尚未获取到今日数据')
-              else ...[
-                if (_error != null) ...[
-                  _errorBanner(_error!),
-                  const SizedBox(height: 12),
-                ],
-                DashboardHero(data: data),
-                const SizedBox(height: 14),
-                AssetStrip(assets: data.assets),
-                const SizedBox(height: 29),
-                SectionHeading(title: '今日任务',
-                    subtitle: '按计划前进，积累每一次进步',
-                    actionLabel: '新建任务', onAction: _createTask),
-                const SizedBox(height: 11),
-                _sortChips(),
-                const SizedBox(height: 14),
-                if (data.tasks.isEmpty)
-                  const EmptySection(message: '今天还没有任务，添加一个小目标吧',
-                      icon: Icons.task_alt_rounded)
-                else
-                  ...data.tasks.map((task) => Padding(
-                    //遍历任务列表，**每一个 task 生成一个 Padding + TaskTile**
-                    padding: const EdgeInsets.only(bottom: 11),  //卡片间距
-                    child: TaskTile(task: task,
-                      todayDate: data.date,
-                      busy: _busy.contains('task-${task.id}'),//按任务 ID 单独加锁，而不是全局一把锁
-                      onComplete: () => _recordTask(task),
-                      onEdit: () => _editTask(task),
-                    ),//点击卡片触发 `_completeTask(task)`
-                  )),
-                const SizedBox(height: 18),
-                SectionHeading(title: '每日习惯',
-                    subtitle: '持续行动，比偶尔冲刺更重要',
-                    actionLabel: '新建习惯', onAction: _openHabitCreate),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: _openHabitManagement,
-                    icon: const Icon(Icons.settings_outlined),
-                    label: const Text('管理习惯'),
-                  ),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Column(
+              children: [
+                // 固定顶部导航：滚动仅发生在下方 ListView。
+                Container(
+                  width: double.infinity,
+                  color: const Color(0xFFEAF2EC),
+                  padding: const EdgeInsets.fromLTRB(20, 15, 20, 15),
+                  child: _topBar(),
                 ),
-                const SizedBox(height: 13),
-                if (data.habits.isEmpty)
-                  const EmptySection(message: '今天没有计划打卡的习惯', icon: Icons.spa_outlined)
-                else
-                  ...data.habits.map((habit) => Padding(
-                    padding: const EdgeInsets.only(bottom: 11),
-                    child: HabitTile(habit: habit,
-                      busy: _busy.contains('habit-${habit.id}'),
-                      onCheckIn: () => _checkIn(habit)),
-                  )),
-                const SizedBox(height: 14),
-                const Center(child: Text('今天也比昨天更进一步 ✨',
-                    style: TextStyle(color: AppColors.muted, fontSize: 12))),
+                Expanded(child: RefreshIndicator(
+              color: AppColors.forest,
+              onRefresh: _load,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 136),
+                children: [
+
+                  // ==========================
+                  // 首页主体内容
+                  // ==========================
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      20, 18, 20, 0,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+
+                        // 加载进度
+                        if (_loading && data != null)
+                          const LinearProgressIndicator(
+                            minHeight: 2,
+                            color: AppColors.leaf,
+                          ),
+
+                        // 加载状态 / 错误状态 / 正常内容
+                        if (_loading && data == null)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 100),
+                            child: Center(
+                              child: CircularProgressIndicator(),
+                            ),
+                          )
+                        else if (data == null)
+                          _failure(_error ?? '尚未获取到今日数据')
+                        else ...[
+
+                            // 错误提示
+                            if (_error != null) ...[
+                              _errorBanner(_error!),
+                              const SizedBox(height: 12),
+                            ],
+
+                            // 今日成长概览
+                            DashboardHero(data: data, onCalendar: _openCalendar),
+
+                            // 原资产展示已从首页移除
+                            // 不删除资产组件及相关业务逻辑
+
+                            const SizedBox(height: 17),
+
+                            // ==========================
+                            // 今日任务
+                            // ==========================
+                            Row(children: [
+                              const Expanded(child: Text('今日任务',
+                                style: TextStyle(color: AppColors.ink,
+                                  fontSize: 20, fontWeight: FontWeight.w800))),
+                              _sortChips(),
+                            ]),
+
+                            const SizedBox(height: 10),
+
+                            if (data.tasks.isEmpty)
+                              const SizedBox(
+                                width: double.infinity,
+                                child: EmptySection(
+                                  message: '今天还没有任务，添加一个小目标吧',
+                                  icon: Icons.task_alt_rounded,
+                                ),
+                              )
+                            else
+                              ...data.tasks.map(
+                                    (task) => Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: 11,
+                                  ),
+                                  child: TaskTile(
+                                    task: task,
+                                    todayDate: data.date,
+                                    busy: _busy.contains(
+                                      'task-${task.id}',
+                                    ),
+                                    onComplete: () => _recordTask(task),
+                                    onEdit: () => _editTask(task),
+                                  ),
+                                ),
+                              ),
+
+                            const SizedBox(height: 18),
+
+                            // ==========================
+                            // 每日习惯
+                            // ==========================
+                            Row(children: [
+                              const Expanded(child: Text('每日习惯',
+                                style: TextStyle(color: AppColors.ink,
+                                  fontSize: 20, fontWeight: FontWeight.w800))),
+                              IconButton.outlined(
+                                tooltip: '管理习惯',
+                                onPressed: _openHabitManagement,
+                                icon: const Icon(Icons.tune_rounded,
+                                  color: AppColors.forest),
+                              ),
+
+                            ]),
+
+                            const SizedBox(height: 13),
+
+                            if (data.habits.isEmpty)
+                              const SizedBox(
+                                width: double.infinity,
+                                child: EmptySection(
+                                  message: '今天没有计划打卡的习惯',
+                                  icon: Icons.spa_outlined,
+                                ),
+                              )
+                            else
+                              ...data.habits.map(
+                                    (habit) => Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: 11,
+                                  ),
+                                  child: HabitTile(
+                                    habit: habit,
+                                    busy: _busy.contains(
+                                      'habit-${habit.id}',
+                                    ),
+                                    onCheckIn: () => _checkIn(habit),
+                                  ),
+                                ),
+                              ),
+
+                            const SizedBox(height: 14),
+
+                            const Center(
+                              child: Text(
+                                '今天也比昨天更进一步 ✨',
+                                style: TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            )),
               ],
-            ],
+            ),
           ),
         ),
-      ))),
+      ),
     );
   }
 
 
+
   Widget _topBar() => Row(
     children: [
-      Container(
-        width: 45,
-        height: 45,
-        decoration: BoxDecoration(
-          color: AppColors.paleGreen,
+      Material(
+        color: AppColors.paleGreen,
+        borderRadius: BorderRadius.circular(15),
+        child: InkWell(
           borderRadius: BorderRadius.circular(15),
-        ),
-        child: const Icon(
-          Icons.eco_rounded,
-          color: AppColors.forest,
-          size: 27,
+          onTap: widget.onOpenModDrawer,
+          child: const SizedBox(
+            width: 45,
+            height: 45,
+            child: Icon(
+              Icons.eco_rounded,
+              color: AppColors.forest,
+              size: 27,
+            ),
+          ),
         ),
       ),
 
@@ -472,34 +542,31 @@ class _TodayPageState extends State<TodayPage> {
   );
 
 
-  Widget _sortChips() => Row(children: [
-        const Icon(Icons.swap_vert_rounded, color: AppColors.muted, size: 18),
-        const SizedBox(width: 6),
-        const Text('排序', style: TextStyle(color: AppColors.muted, fontSize: 12)),
-        const SizedBox(width: 12),
-        _chip('time', '按时间'),
-        const SizedBox(width: 8),
-    _chip('importance', '按优先级'),
-      ]);
-
-  Widget _chip(String value, String label) {
-    final selected = _sort == value;
-    return ChoiceChip(
-      selected: selected,
-      showCheckmark: false,
-      label: Text(label, style: TextStyle(fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-        fontSize: 12, color: selected ? Colors.white : AppColors.forest)),
-      selectedColor: AppColors.forest,
-      backgroundColor: Colors.white,
-      side: BorderSide(color: selected ? AppColors.forest : AppColors.border),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      onSelected: (_) {
-        if (_sort == value) return;
-        setState(() => _sort = value);
-        _load();
-      },
-    );
-  }
+  Widget _sortChips() => PopupMenuButton<String>(
+    tooltip: '任务排序',
+    initialValue: _sort,
+    onSelected: (value) {
+      if (_sort == value) return;
+      setState(() => _sort = value);
+      _load();
+    },
+    itemBuilder: (context) => const [
+      PopupMenuItem(value: 'time', child: Text('按时间')),
+      PopupMenuItem(value: 'importance', child: Text('按优先级')),
+    ],
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border), color: Colors.white),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.sort_rounded, size: 17, color: AppColors.forest),
+        const SizedBox(width: 4),
+        Text(_sort == 'time' ? '时间' : '优先级',
+          style: const TextStyle(fontSize: 12, color: AppColors.forest)),
+        const Icon(Icons.arrow_drop_down, size: 18, color: AppColors.forest),
+      ]),
+    ),
+  );
 
   Widget _failure(String error) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 72),
@@ -614,6 +681,7 @@ class _TaskComposerState extends State<TaskComposer> {
   bool _categoriesLoading = true;
   String? _categoryError;
   bool _saving = false;
+  bool _expanded = false; // 创建时只显示标题和创建按钮
   String? _error;
 
   @override
@@ -626,6 +694,7 @@ class _TaskComposerState extends State<TaskComposer> {
       _loadCategories();
       return;
     }
+    _expanded = true; // 编辑时展开，以便看见已有配置
     _categoryId = (detail['categoryId'] as num?)?.toInt() ?? 0;
     _loadCategories();
 
@@ -823,221 +892,132 @@ class _TaskComposerState extends State<TaskComposer> {
 
   @override
   Widget build(BuildContext context) => _sheetLayout(context,
-    title: widget.isEditing ? '编辑任务' : '创建新任务',
+    title: widget.isEditing ? '编辑任务' : '新建任务',
     children: [
-      TextField(controller: _title, maxLength: 100,
-          decoration: const InputDecoration(labelText: '任务标题 *', hintText: '例如：复习 Java 集合')),
-      const SizedBox(height: 10),
-      TextField(controller: _note, maxLines: 2,
+      TextField(
+        controller: _title,
+        maxLength: 100,
+        textInputAction: TextInputAction.done,
+        decoration: const InputDecoration(
+          labelText: '任务标题 *', hintText: '例如：复习 Java 集合',
+        ),
+      ),
+      if (_expanded) ...[
+        const SizedBox(height: 6),
+        TextField(controller: _note, maxLines: 2,
           decoration: const InputDecoration(labelText: '备注（可选）')),
-      const SizedBox(height: 13),
-      DropdownButtonFormField<int>(
-        initialValue: _categoryId,
-        decoration: InputDecoration(
-          labelText: '任务分类',
-          helperText: _categoryError == null ? '分类可在任务库中自定义' : '分类加载失败，可重试',
-        ),
-        items: [
-          const DropdownMenuItem<int>(value: 0, child: Text('未分类')),
-          if (_categoryId != 0 &&
-              !_categories.any((item) =>
-                  (item['categoryId'] as num).toInt() == _categoryId))
-            DropdownMenuItem<int>(
-              value: _categoryId,
-              child: const Text('当前分类（暂不可用）'),
-            ),
-          ..._categories.map((category) {
-            final id = (category['categoryId'] as num).toInt();
-            final enabled = category['enabled'] == true;
-            final selected = id == _categoryId;
-            return DropdownMenuItem<int>(
-              value: id,
-              enabled: enabled || selected,
-              child: Text('${category['name'] ?? ''}${enabled ? '' : '（已停用）'}'),
-            );
-          }),
-        ],
-        onChanged: _categoriesLoading ? null : (value) {
-          if (value != null) setState(() => _categoryId = value);
-        },
-      ),
-      Align(
-        alignment: Alignment.centerRight,
-        child: TextButton.icon(
-          onPressed: _manageCategories,
-          icon: const Icon(Icons.category_outlined, size: 18),
-          label: const Text('管理分类'),
-        ),
-      ),
-      const SizedBox(height: 13),
-      TextField(controller: _target, keyboardType: TextInputType.number,
+        const SizedBox(height: 12),
+        TextField(
+          controller: _target,
+          keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: const InputDecoration(labelText: '目标次数 *')),
-
-  const SizedBox(height: 15),
-
-  const Align(
-  alignment: Alignment.centerLeft,
-  child: Text(
-  '记录方式',
-  style: TextStyle(fontWeight: FontWeight.w600),
-  ),
-  ),
-
-  const SizedBox(height: 8),
-
-  Wrap(
-  spacing: 8,
-  runSpacing: 8,
-  children: [
-  ChoiceChip(
-  label: const Text('默认 +1'),
-  selected: _recordMode == 'DEFAULT',
-  onSelected: (_) {
-  setState(() => _recordMode = 'DEFAULT');
-  },
-  ),
-  ChoiceChip(
-  label: const Text('固定数量'),
-  selected: _recordMode == 'FIXED',
-  onSelected: (_) {
-  setState(() => _recordMode = 'FIXED');
-  },
-  ),
-  ChoiceChip(
-  label: const Text('手动输入'),
-  selected: _recordMode == 'MANUAL',
-  onSelected: (_) {
-  setState(() => _recordMode = 'MANUAL');
-  },
-  ),
-  ],
-  ),
-
-  if (_recordMode == 'FIXED') ...[
-  const SizedBox(height: 10),
-  TextField(
-  controller: _fixedCount,
-  keyboardType: TextInputType.number,
-  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-  decoration: const InputDecoration(
-  labelText: '每次记录数量 *',
-  hintText: '例如：5',
-  ),
-  ),
-  ],
-
-  const SizedBox(height: 15),
-
-      const SizedBox(height: 15),
-      _rating('重要程度（参与优先级计算）', _importance, (n) => setState(() => _importance = n)),
-      const SizedBox(height: 9),
-      _rating('任务难度（奖励算法后续接入）', _difficulty, (n) => setState(() => _difficulty = n)),
-      const SizedBox(height: 12),
-      OutlinedButton.icon(
-        onPressed: _saving ? null : _pickEnd,
-        icon: const Icon(Icons.event_available_rounded),
-        label: Text(_end == null
-            ? '设置自定义截止时间（可选）'
-            : '截止时间：${_formatEnd(_end!)}'),
-      ),
-      if (!widget.isEditing && _end != null)
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(
-            onPressed: _saving ? null : () => setState(() { _end = null; _error = null; }),
-            child: const Text('恢复默认截止时间（下一个凌晨 05:00）'),
-          ),
+          decoration: const InputDecoration(labelText: '目标次数 *'),
         ),
-      const SizedBox(height: 12),
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppColors.paleGreen,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: const Row(children: [
-          Icon(Icons.schedule_rounded, size: 18, color: AppColors.forest),
-          SizedBox(width: 8),
-          Expanded(child: Text(
-            '默认截止时间为下一个凌晨 05:00；长期任务可设置自定义截止时间。',
-            style: TextStyle(fontSize: 12, color: AppColors.forest),
+        const SizedBox(height: 13),
+        const Text('记录方式', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Wrap(spacing: 7, runSpacing: 5, children: [
+          for (final option in const [
+            ('DEFAULT','默认 +1'), ('FIXED','固定数量'), ('MANUAL','手动输入')
+          ])
+            ChoiceChip(
+              showCheckmark: false,
+              label: Text(option.$2),
+              selected: _recordMode == option.$1,
+              onSelected: (_) => setState(() => _recordMode = option.$1),
+            ),
+        ]),
+        if (_recordMode == 'FIXED') ...[
+          const SizedBox(height: 8),
+          TextField(controller: _fixedCount,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(labelText: '每次记录数量 *')),
+        ],
+        const SizedBox(height: 14),
+        _rating('重要程度', _importance,
+          (value) => setState(() => _importance = value)),
+        const SizedBox(height: 9),
+        _rating('困难程度', _difficulty,
+          (value) => setState(() => _difficulty = value)),
+        const SizedBox(height: 13),
+        Row(children: [
+          Expanded(child: OutlinedButton.icon(
+            onPressed: _saving ? null : _pickEnd,
+            icon: const Icon(Icons.event_available_rounded, size: 18),
+            label: Text(_end == null ? '截止时间' : _formatEnd(_end!),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: OutlinedButton.icon(
+            onPressed: _saving ? null : _manageCategories,
+            icon: const Icon(Icons.category_outlined, size: 18),
+            label: const Text('管理分类'),
           )),
         ]),
-      ),
-      if (_error != null) Padding(padding: const EdgeInsets.only(top: 10),
-          child: Text(_error!, style: const TextStyle(color: AppColors.rose, fontSize: 12))),
-      const SizedBox(height: 16),
-      SizedBox(width: double.infinity, child: FilledButton(
-        onPressed: (_saving || _categoriesLoading) ? null : _save,
-        style: FilledButton.styleFrom(backgroundColor: AppColors.forest,
-          minimumSize: const Size.fromHeight(50)),
-        child: Text(_saving ? (widget.isEditing ? '正在保存…' : '正在创建…') : (widget.isEditing ? '保存修改' : '创建任务')),
-      )),
-    ],
-  );
-}
-
-class HabitComposer extends StatefulWidget {
-  const HabitComposer({super.key, required this.api, required this.startDate});
-  final TodayApi api;
-  final String startDate;
-  @override
-  State<HabitComposer> createState() => _HabitComposerState();
-}
-
-class _HabitComposerState extends State<HabitComposer> {
-  final _name = TextEditingController();
-  final _note = TextEditingController();
-  bool _saving = false;
-  String? _error;
-
-  @override
-  void dispose() { _name.dispose(); _note.dispose(); super.dispose(); }
-
-  Future<void> _save() async {
-    if (_name.text.trim().isEmpty) {
-      setState(() => _error = '请输入习惯名称');
-      return;
-    }
-    setState(() { _saving = true; _error = null; });
-    try {
-      await widget.api.createDailyHabit(name: _name.text.trim(),
-          note: _note.text.trim(), startDate: widget.startDate);
-      if (mounted) Navigator.pop(context, true);
-    } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => _sheetLayout(context,
-    title: '养成一个好习惯',
-    children: [
-      TextField(controller: _name, maxLength: 100,
-          decoration: const InputDecoration(labelText: '习惯名称 *', hintText: '例如：每天阅读30分钟')),
-      const SizedBox(height: 10),
-      TextField(controller: _note, maxLines: 2,
-          decoration: const InputDecoration(labelText: '备注（可选）')),
-      const SizedBox(height: 14),
-      const Chip(avatar: Icon(Icons.repeat_rounded, size: 18), label: Text('每日重复 · V0.1')),
-      const SizedBox(height: 10),
-      const Text('每周指定日期的习惯后续在习惯管理页开放。',
-          style: TextStyle(color: AppColors.muted, fontSize: 12)),
-      if (_error != null) Padding(padding: const EdgeInsets.only(top: 10),
-          child: Text(_error!, style: const TextStyle(color: AppColors.rose, fontSize: 12))),
-      const SizedBox(height: 17),
+        if (!widget.isEditing && _end != null)
+          Align(alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _saving ? null : () => setState(() => _end = null),
+              child: const Text('恢复默认截止时间（次日 05:00）'),
+            )),
+        const SizedBox(height: 12),
+        Row(children: [
+          const Text('任务分类', style: TextStyle(fontWeight: FontWeight.w700)),
+          if (_categoriesLoading) ...[
+            const SizedBox(width: 8),
+            const SizedBox(width: 14, height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+          ],
+        ]),
+        const SizedBox(height: 7),
+        if (_categoryError != null)
+          Text('分类加载失败：$_categoryError',
+            style: const TextStyle(fontSize: 12, color: AppColors.rose)),
+        Wrap(spacing: 7, runSpacing: 5, children: [
+          ChoiceChip(
+            showCheckmark: false,
+            label: const Text('未分类'),
+            selected: _categoryId == 0,
+            onSelected: (_) => setState(() => _categoryId = 0),
+          ),
+          for (final category in _categories)
+            if (category['enabled'] == true ||
+                (category['categoryId'] as num).toInt() == _categoryId)
+              ChoiceChip(
+                showCheckmark: false,
+                label: Text('${category['name']}${category['enabled'] == true ? '' : '（已停用）'}'),
+                selected: _categoryId == (category['categoryId'] as num).toInt(),
+                onSelected: category['enabled'] == true
+                    ? (_) => setState(() =>
+                        _categoryId = (category['categoryId'] as num).toInt())
+                    : null,
+              ),
+        ]),
+      ],
+      if (!widget.isEditing)
+        Center(child: TextButton.icon(
+          onPressed: _saving ? null : () => setState(() => _expanded = !_expanded),
+          icon: Icon(_expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down),
+          label: Text(_expanded ? '收起选项' : '展开更多'),
+        )),
+      if (_error != null)
+        Padding(padding: const EdgeInsets.only(bottom: 8),
+          child: Text(_error!,
+            style: const TextStyle(color: AppColors.rose, fontSize: 12))),
+      const SizedBox(height: 9),
       SizedBox(width: double.infinity, child: FilledButton(
         onPressed: _saving ? null : _save,
-        style: FilledButton.styleFrom(backgroundColor: AppColors.forest,
+        style: FilledButton.styleFrom(
+          backgroundColor: AppColors.forest,
           minimumSize: const Size.fromHeight(50)),
-        child: Text(_saving ? '正在创建…' : '创建每日习惯'),
+        child: Text(_saving
+          ? (widget.isEditing ? '正在保存…' : '正在创建…')
+          : (widget.isEditing ? '保存修改' : '创建任务')),
       )),
     ],
   );
+
 }
 
 Widget _sheetLayout(BuildContext context, {required String title,
@@ -1052,25 +1032,28 @@ Widget _sheetLayout(BuildContext context, {required String title,
   ]),
 ));
 
+/// 重要程度与困难程度采用紧凑标签，点击立即切换选中值。
 Widget _rating(String label, int selected, ValueChanged<int> change) => Column(
-  crossAxisAlignment: CrossAxisAlignment.start, children: [
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
     Text(label, style: const TextStyle(fontSize: 13,
-        fontWeight: FontWeight.w600, color: AppColors.ink)),
+      fontWeight: FontWeight.w600, color: AppColors.ink)),
     const SizedBox(height: 7),
-    Row(children: [1, 2, 3, 4, 5].map((number) => Expanded(
-      child: Padding(padding: const EdgeInsets.only(right: 5),
-        child: OutlinedButton(
-          onPressed: () => change(number),
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size(36, 40), padding: EdgeInsets.zero,
-            foregroundColor: selected == number ? Colors.white : AppColors.forest,
-            backgroundColor: selected == number ? AppColors.forest : Colors.white,
-            side: BorderSide(color: selected == number ? AppColors.forest : AppColors.border)),
-          child: Text('$number'),
-        ),
-      ),
-    )).toList()),
+    Row(children: [
+      for (var number = 1; number <= 5; number++)
+        Expanded(child: Padding(
+          padding: const EdgeInsets.only(right: 5),
+          child: ChoiceChip(
+            showCheckmark: false,
+            label: SizedBox(width: double.infinity,
+              child: Text('$number', textAlign: TextAlign.center,
+                style: TextStyle(color: selected == number
+                  ? AppColors.deepForest : AppColors.muted))),
+            selected: selected == number,
+            onSelected: (_) => change(number),
+            labelPadding: EdgeInsets.zero,
+          ),
+        )),
+    ]),
   ],
 );
-
-

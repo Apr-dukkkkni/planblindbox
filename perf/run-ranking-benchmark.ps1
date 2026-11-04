@@ -22,7 +22,6 @@ if (-not (Test-Path (Join-Path $serverDir 'pom.xml'))) {
     throw "Missing mod-server/pom.xml under $root"
 }
 if (-not (Test-Path $k6Script)) { throw 'Missing ranking-mysql-load.js next to this script.' }
-if (-not (Test-Path (Join-Path $perfDir 'write-ranking-report.ps1'))) { throw 'Missing write-ranking-report.ps1 next to this script.' }
 foreach ($program in @('mvn', 'java', 'docker', 'curl.exe')) {
     if (-not (Get-Command $program -ErrorAction SilentlyContinue)) {
         throw "Missing required command: $program"
@@ -45,6 +44,7 @@ New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 $logPath = Join-Path $outDir 'server.log'
 $errPath = Join-Path $outDir 'server-err.log'
 $summaryPath = Join-Path $outDir 'k6-summary.json'
+$k6Console = Join-Path $outDir 'k6-console.log'
 $reportPath = Join-Path $outDir 'report.md'
 
 $envNames = @(
@@ -131,24 +131,29 @@ try {
     & docker run --rm -v "${mountPath}:/scripts" `
         -e "TARGET_URL=$targetUrl" -e "VUS=$VUs" `
         -e "STAGE_SECONDS=${StageSeconds}s" -e "SLEEP_SECONDS=$SleepSeconds" `
-        grafana/k6 run --summary-export $summaryInContainer /scripts/ranking-mysql-load.js
-    if ($LASTEXITCODE -ne 0) { throw "k6 exited with code $LASTEXITCODE." }
-    if (-not (Test-Path $summaryPath)) { throw "k6 summary not found: $summaryPath" }
+        grafana/k6 run --summary-export $summaryInContainer /scripts/ranking-mysql-load.js 2>&1 |
+        Tee-Object -FilePath $k6Console
+    $k6ExitCode = $LASTEXITCODE
+    if (-not (Test-Path $summaryPath)) { throw "k6 summary not found: $summaryPath (exit $k6ExitCode)" }
 
-    Write-Host 'Generating validated report...'
+    # The standalone report writer understands k6 Counter, Rate and Trend formats.
+    # Do not silently write zeros for missing metrics.
+    $reportWriter = Join-Path $perfDir 'write-ranking-report.ps1'
+    if (-not (Test-Path -LiteralPath $reportWriter)) { throw "Missing report writer: $reportWriter" }
     $reportArgs = @{
         SummaryPath = $summaryPath
         Database = $Database
-        StageSeconds = $StageSeconds
         VUs = $VUs
+        StageSeconds = $StageSeconds
         Limit = $Limit
         SleepSeconds = $SleepSeconds
     }
     if (-not [string]::IsNullOrWhiteSpace($BaselineJson)) {
-        $reportArgs['BaselineJson'] = $BaselineJson
+        $reportArgs.BaselineJson = $BaselineJson
     }
-    & (Join-Path $perfDir 'write-ranking-report.ps1') @reportArgs
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Report generator failed: $LASTEXITCODE" }
+    & $reportWriter @reportArgs
+    if (-not (Test-Path -LiteralPath $reportPath)) { throw "Report not generated: $reportPath" }
+    if ($k6ExitCode -ne 0) { throw "k6 finished with exit $k6ExitCode (threshold or run failed); report preserved: $reportPath" }
 
 }
 finally {

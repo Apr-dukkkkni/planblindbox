@@ -1,6 +1,8 @@
 
 import 'package:flutter/material.dart';
 import 'config/api_config.dart';
+import 'data/mod_market_api.dart';
+import 'auth/planblindbox_auth.dart';
 import 'data/local/local_database.dart';
 import 'data/today_api.dart';
 import 'theme/app_theme.dart';
@@ -23,6 +25,15 @@ class PlanBlindBoxApp extends StatefulWidget {
 }
 
 class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
+  late final AuthSession _auth = AuthSession(AuthApi(baseUrl: ModMarketApi.baseUrl));
+  bool _firstLoginScreen = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _auth.restore();
+  }
+
   late final TodayApi _api = TodayApi(
     baseUrl: ApiConfig.baseUrl,
     userId: ApiConfig.userId,
@@ -33,9 +44,7 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
   CloudArchiveController(
     bridge: ArchiveDataBridge(
       exportJson: () async {
-        throw StateError(
-          '尚未接入本地备份导出函数',
-        );
+        return await _api.repository.exportBackupJson();
       },
 
       restoreJson: (backupJson) async {
@@ -50,8 +59,10 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
   @override
   void dispose() {
     _api.dispose();
+    _auth.dispose();
+    _auth.api.dispose();
     super.dispose();
-    _archive.diapose();
+    _archive.dispose();
   }
 
   @override
@@ -95,8 +106,21 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
                       : const [],
                 ),
                 // 注意：使用已经定义好的 _api
-                child: AppShell(api: _api,
-                archiveController:_archive,
+                child: ListenableBuilder(
+                  listenable: _auth,
+                  builder: (context, _) {
+                    if (_auth.state == LoginState.loading) {
+                      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+                    }
+                    if (_firstLoginScreen && !_auth.isSignedIn) {
+                      return LoginPage(
+                        session: _auth,
+                        onGuest: () => setState(() => _firstLoginScreen = false),
+                        onLoggedIn: () => setState(() => _firstLoginScreen = false),
+                      );
+                    }
+                    return AppShell(api: _api, auth: _auth, archiveController: _archive);
+                  },
                 ),
               ),
             ),

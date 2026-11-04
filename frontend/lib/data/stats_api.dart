@@ -180,6 +180,7 @@ class CalendarMonthData {
   }
 }
 
+
 class CalendarDaySummary {
   const CalendarDaySummary({
     required this.date,
@@ -187,23 +188,61 @@ class CalendarDaySummary {
     required this.habitCheckIns,
     required this.timeRecordCount,
     required this.timeMinutes,
+    this.requiredTasks = 0,
+    this.requiredHabits = 0,
   });
+
   final String date;
+
+  // 已完成数量
   final int completedTasks;
   final int habitCheckIns;
+
+  // 当天计划数量
+  final int requiredTasks;
+  final int requiredHabits;
+
+  // 时间统计
   final int timeRecordCount;
   final int timeMinutes;
 
-  int get activityCount => completedTasks + habitCheckIns + timeRecordCount;
+  // 总计划数量
+  int get totalRequired =>
+      requiredTasks + requiredHabits;
 
-  factory CalendarDaySummary.fromJson(Map<String, dynamic> json) => CalendarDaySummary(
-    date: json['date']?.toString() ?? '',
-    completedTasks: _asInt(json['completedTasks']),
-    habitCheckIns: _asInt(json['habitCheckIns']),
-    timeRecordCount: _asInt(json['timeRecordCount']),
-    timeMinutes: _asInt(json['timeMinutes']),
-  );
+  // 总完成数量
+  int get totalCompleted =>
+      completedTasks + habitCheckIns;
+
+  // 每日计划完成率，返回 0.0 ~ 1.0
+  double get completionRate {
+    if (totalRequired == 0) return 0.0;
+
+    return (totalCompleted / totalRequired)
+        .clamp(0.0, 1.0)
+        .toDouble();
+  }
+
+  int get activityCount =>
+      completedTasks + habitCheckIns + timeRecordCount;
+
+  factory CalendarDaySummary.fromJson(
+      Map<String, dynamic> json) {
+    return CalendarDaySummary(
+      date: json['date']?.toString() ?? '',
+
+      completedTasks: _asInt(json['completedTasks']),
+      habitCheckIns: _asInt(json['habitCheckIns']),
+
+      requiredTasks: _asInt(json['requiredTasks']),
+      requiredHabits: _asInt(json['requiredHabits']),
+
+      timeRecordCount: _asInt(json['timeRecordCount']),
+      timeMinutes: _asInt(json['timeMinutes']),
+    );
+  }
 }
+
 
 class CalendarDayDetail {
   const CalendarDayDetail({required this.date, required this.tasks, required this.habits,

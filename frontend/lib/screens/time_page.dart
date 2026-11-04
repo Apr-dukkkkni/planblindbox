@@ -23,6 +23,7 @@ class _TimePageState extends State<TimePage> {
   CalendarDayDetail? _dayDetail;
   int _dayRequestSequence = 0;
   bool _loadingDay = true;
+  bool _gyroEnabled = true;
   String? _dayError;
 
   @override
@@ -100,7 +101,7 @@ class _TimePageState extends State<TimePage> {
   bool get _selectedDateIsToday => _sameDate(_selectedDate, _businessDate(DateTime.now()));
 
   Future<void> _openFishing() async {
-    if (!_selectedDateIsToday || !mounted) return;
+    if (!_selectedDateIsToday || !_gyroEnabled || !mounted) return;
     await showDialog<int>(
       context: context,
       barrierDismissible: false,
@@ -241,13 +242,26 @@ class _TimePageState extends State<TimePage> {
           ],
         )),
       ]),
-      const SizedBox(height: 14),
+      SwitchListTile.adaptive(
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        secondary: const Icon(Icons.screen_rotation_alt_rounded,
+          color: AppColors.forest),
+        title: const Text('陀螺仪检测',
+          style: TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: const Text('检测到手机明显转动时，当前鱼会逃走'),
+        value: _gyroEnabled,
+        onChanged: (value) => setState(() => _gyroEnabled = value),
+      ),
+      const SizedBox(height: 10),
       SizedBox(
         width: double.infinity,
         child: FilledButton.icon(
-          onPressed: _loadingDay || !_selectedDateIsToday ? null : _openFishing,
+          onPressed: _loadingDay || !_selectedDateIsToday || !_gyroEnabled
+            ? null : _openFishing,
           icon: const Icon(Icons.set_meal_rounded),
-          label: Text(_selectedDateIsToday ? '开始钓鱼' : '仅今天可以开始钓鱼'),
+          label: Text(!_gyroEnabled ? '请先开启陀螺仪检测' :
+            (_selectedDateIsToday ? '开始钓鱼' : '仅今天可以开始钓鱼')),
           style: FilledButton.styleFrom(
             backgroundColor: AppColors.forest,
             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -255,7 +269,7 @@ class _TimePageState extends State<TimePage> {
         ),
       ),
       const SizedBox(height: 6),
-      const Text('陀螺仪检测暂未启用；当前版本不会持续监听手机传感器。',
+      const Text('钓鱼期间监听陀螺仪；检测不可用时不会继续计时。仅支持具备传感器的设备。',
         style: TextStyle(fontSize: 10, color: AppColors.muted)),
     ],
   ));

@@ -25,10 +25,10 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
     minutes: _configuredCatchMinutes > 0 ? _configuredCatchMinutes : 30,
   );
 
-  // 仅为未来的传感器实现预留的参数；当前占位检测器不会使用它。
+  // 角速度阈值：2.0 rad/s。真实阈值可在安卓真机调试后微调。
   static const double _motionThreshold = 2.0;
 
-  final FishingMotionDetector _motionDetector = NoopFishingMotionDetector();
+  final FishingMotionDetector _motionDetector = GyroscopeFishingMotionDetector();
   Timer? _ticker;
   DateTime? _attemptStart;
   DateTime? _segmentStart;
@@ -40,6 +40,7 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
   bool _ending = false;
   bool _closing = false;
   bool _processingCatch = false;
+  bool _gyroReady = false;
   String _statusMessage = '正在准备鱼竿……';
 
   @override
@@ -70,6 +71,7 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
     setState(() {
       _active = true;
       _escaped = false;
+      _gyroReady = false;
       _attemptStart = now;
       _segmentStart = now;
       _attemptElapsed = Duration.zero;
@@ -82,15 +84,20 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
         threshold: _motionThreshold,
         onExcessiveMotion: () {
           unawaited(_endFishing(
-            reason: '手机晃动超过阈值，鱼被吓跑了。请重新开始钓鱼。',
+            reason: '检测到手机明显转动，鱼儿被吓跑了。',
             savePartial: true,
           ));
         },
       );
+      if (mounted && _active) {
+        setState(() => _gyroReady = true);
+      }
     } catch (error) {
       if (mounted && _active) {
-        setState(() => _statusMessage = '运动检测接口启动失败：$error');
+        // 无传感器时停止计时，不会在缺少运动检测的情况下持续获得奖励。
+        await _endFishing(reason: '无法启动陀螺仪检测：$error', savePartial: false);
       }
+      return;
     }
 
     if (!mounted || !_active) return;
@@ -157,6 +164,7 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
     _ticker = null;
     setState(() {
       _active = false;
+      _gyroReady = false;
       _escaped = true;
       _statusMessage = reason;
     });
@@ -300,7 +308,9 @@ class _FishingSessionDialogState extends State<FishingSessionDialog>
                 const SizedBox(width: 7),
                 Expanded(
                   child: Text(
-                    '陀螺仪检测接口已预留，当前未开启传感器监听。',
+                    _gyroReady
+                        ? '陀螺仪检测中 · 检测明显转动（阈值 2.0 rad/s）'
+                        : '陀螺仪未就绪：请使用支持传感器的安卓/iOS 真机。',
                     style: const TextStyle(fontSize: 11, color: AppColors.muted),
                   ),
                 ),

@@ -475,6 +475,7 @@ class _HabitFormState extends State<_HabitForm> {
   final Set<int> _weekdays = {};
 
   bool _saving = false;
+  bool _expanded = false; // 新建习惯只显示名称与创建按钮
   int _importance = 3;
   int _difficulty = 3;
   String? _error;
@@ -485,6 +486,7 @@ class _HabitFormState extends State<_HabitForm> {
 
     final habit = widget.original;
     if (habit == null) return;
+    _expanded = true;
 
     _name.text = habit.name;
     _note.text = habit.note;
@@ -580,6 +582,27 @@ class _HabitFormState extends State<_HabitForm> {
     }
   }
 
+  Widget _scoreChips(String label, int value, ValueChanged<int> onChanged) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      const SizedBox(height: 6),
+      Row(children: [
+        for (var number = 1; number <= 5; number++)
+          Expanded(child: Padding(
+            padding: const EdgeInsets.only(right: 5),
+            child: ChoiceChip(
+              showCheckmark: false,
+              label: SizedBox(width: double.infinity,
+                child: Text('$number', textAlign: TextAlign.center)),
+              selected: value == number,
+              onSelected: (_) => onChanged(number),
+              labelPadding: EdgeInsets.zero,
+            ),
+          )),
+      ]),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final editing = widget.original != null;
@@ -610,125 +633,59 @@ class _HabitFormState extends State<_HabitForm> {
               decoration: const InputDecoration(labelText: '习惯名称 *'),
             ),
 
-            const SizedBox(height: 5),
-
-            TextField(
-              controller: _note,
-              maxLines: 1,
-              decoration: const InputDecoration(labelText: '备注（可选）'),
-            ),
-
-            const SizedBox(height: 12),
-
-            // 重要程度。
-            DropdownButtonFormField<int>(
-              initialValue: _importance,
-              decoration: const InputDecoration(labelText: '重要程度（1～5）'),
-              items: List.generate(5, (index) {
-                final value = index + 1;
-
-                return DropdownMenuItem<int>(
-                  value: value,
-                  child: Text('$value'),
-                );
-              }),
-              onChanged: _saving
-                  ? null
-                  : (value) {
-                      if (value != null) {
-                        setState(() => _importance = value);
-                      }
-                    },
-            ),
-
-            const SizedBox(height: 12),
-
-            // 困难程度。
-            DropdownButtonFormField<int>(
-              initialValue: _difficulty,
-              decoration: const InputDecoration(labelText: '困难程度（1～5）'),
-              items: List.generate(5, (index) {
-                final value = index + 1;
-
-                return DropdownMenuItem<int>(
-                  value: value,
-                  child: Text('$value'),
-                );
-              }),
-              onChanged: _saving
-                  ? null
-                  : (value) {
-                      if (value != null) {
-                        setState(() => _difficulty = value);
-                      }
-                    },
-            ),
-
-            const SizedBox(height: 14),
-
-            const Text('重复规则', style: TextStyle(fontWeight: FontWeight.w600)),
-
-            const SizedBox(height: 8),
-
-            Wrap(
-              spacing: 8,
-              children: [
-                ChoiceChip(
-                  label: const Text('每天'),
+            if (_expanded) ...[
+              const SizedBox(height: 6),
+              TextField(controller: _note, maxLines: 2,
+                decoration: const InputDecoration(labelText: '备注（可选）')),
+              const SizedBox(height: 12),
+              _scoreChips('重要程度', _importance,
+                (value) => setState(() => _importance = value)),
+              const SizedBox(height: 10),
+              _scoreChips('困难程度', _difficulty,
+                (value) => setState(() => _difficulty = value)),
+              const SizedBox(height: 12),
+              const Text('重复规则', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(spacing: 8, runSpacing: 6, children: [
+                ChoiceChip(label: const Text('每天'),
                   selected: _type == 'DAILY',
-                  onSelected: (_) {
-                    setState(() => _type = 'DAILY');
-                  },
-                ),
-                ChoiceChip(
-                  label: const Text('每周指定日期'),
+                  onSelected: (_) => setState(() => _type = 'DAILY')),
+                ChoiceChip(label: const Text('每周指定日期'),
                   selected: _type == 'WEEKLY',
-                  onSelected: (_) {
-                    setState(() => _type = 'WEEKLY');
-                  },
-                ),
-              ],
-            ),
-
-            if (_type == 'WEEKLY') ...[
-              const SizedBox(height: 8),
-
-              Wrap(
-                spacing: 7,
-                runSpacing: 5,
-                children: [
+                  onSelected: (_) => setState(() => _type = 'WEEKLY')),
+              ]),
+              if (_type == 'WEEKLY') ...[
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, children: [
                   for (var index = 0; index < days.length; index++)
                     FilterChip(
                       label: Text('周${days[index]}'),
                       selected: _weekdays.contains(index + 1),
-                      onSelected: (selected) {
-                        setState(() {
-                          if (selected) {
-                            _weekdays.add(index + 1);
-                          } else {
-                            _weekdays.remove(index + 1);
-                          }
-                        });
-                      },
+                      onSelected: (selected) => setState(() {
+                        if (selected) {
+                          _weekdays.add(index + 1);
+                        } else {
+                          _weekdays.remove(index + 1);
+                        }
+                      }),
                     ),
-                ],
-              ),
+                ]),
+              ],
+              const SizedBox(height: 10),
+              Text(editing
+                    ? '原开始日期：${widget.original!.startDate}（保持不变）'
+                    : '开始日期：${widget.businessDate}（05:00 业务日）',
+                style: Theme.of(context).textTheme.bodySmall),
+              if (editing && widget.original!.endDate != null)
+                Text('原结束日期：${widget.original!.endDate}（保持不变）',
+                  style: Theme.of(context).textTheme.bodySmall),
             ],
-
-            const SizedBox(height: 10),
-
-            Text(
-              editing
-                  ? '原开始日期：${widget.original!.startDate}（保持不变）'
-                  : '开始日期：${widget.businessDate}（按凌晨 5 点业务日计算）',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-
-            if (editing && widget.original!.endDate != null)
-              Text(
-                '原结束日期：${widget.original!.endDate}（保持不变）',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+            if (!editing)
+              Center(child: TextButton.icon(
+                onPressed: _saving ? null : () => setState(() => _expanded = !_expanded),
+                icon: Icon(_expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down),
+                label: Text(_expanded ? '收起选项' : '展开更多'),
+              )),
 
             if (_error != null) ...[
               const SizedBox(height: 10),

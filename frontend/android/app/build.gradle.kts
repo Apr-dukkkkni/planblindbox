@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.plan_blind_box"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

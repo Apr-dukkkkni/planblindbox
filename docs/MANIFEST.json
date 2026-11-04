@@ -1,0 +1,230 @@
+[
+  {
+    "file": "frontend/lib/main.dart",
+    "new": false,
+    "sha256": "c2b1d24b8768506b1c9f52fa0325f02e4e9f62447f4686d99d6f1c57ebead27e",
+    "lines": 132
+  },
+  {
+    "file": "frontend/lib/data/mod_market_api.dart",
+    "new": false,
+    "sha256": "676051c7f7ae9fb10dc9c9351bbce1f071bb97c8fe588050f9506f3098f39ec4",
+    "lines": 108
+  },
+  {
+    "file": "frontend/lib/screens/app_shell.dart",
+    "new": false,
+    "sha256": "90bcb9b6653f515324d09f591d73dafb0f9de5e4067af3b6c3dc0d99c2000b7f",
+    "lines": 177
+  },
+  {
+    "file": "frontend/lib/screens/mod_hub_drawer.dart",
+    "new": false,
+    "sha256": "983bc61ef191267c000bd6ef9fce99b9c523900d598489b9e13e187926677e9f",
+    "lines": 186
+  },
+  {
+    "file": "frontend/lib/screens/mod_marketplace_page.dart",
+    "new": false,
+    "sha256": "0d1ca240624569e38e3924c022e769906e4b05468e1f805ef68fd4c1a55c3f60",
+    "lines": 182
+  },
+  {
+    "file": "frontend/lib/screens/my_page.dart",
+    "new": false,
+    "sha256": "3a7105fa7a35ed416fd5c149e7fe5f3cfdc61d62b5fb8fe821e8dcc60555be7a",
+    "lines": 525
+  },
+  {
+    "file": "frontend/lib/screens/user_cloud_progress_page.dart",
+    "new": true,
+    "sha256": "d2dc736f0452fc366c8f2c780c89c44ba17db1ec5a8b3a717943f7ffdb420815",
+    "lines": 119
+  },
+  {
+    "file": "frontend/lib/auth/auth_api.dart",
+    "new": true,
+    "sha256": "5d91a6314f6addae2c6abfb335f0bebf4e4f3cbd0ac39697b601b76d94d4b507",
+    "lines": 236
+  },
+  {
+    "file": "frontend/lib/auth/auth_pages.dart",
+    "new": true,
+    "sha256": "2651e62ab474dd420ee59c974396a7ed2d39fe830d41641f9fdb721da67e73d5",
+    "lines": 407
+  },
+  {
+    "file": "frontend/lib/auth/auth_session.dart",
+    "new": true,
+    "sha256": "808b112dea478b8d45ec8fe03c6d4d95e4366f1acab5d50587558b2a82dcedc9",
+    "lines": 86
+  },
+  {
+    "file": "frontend/lib/auth/planblindbox_auth.dart",
+    "new": true,
+    "sha256": "1f14b6fa6457ccb754432912caf5e3c72f5e91bc34b8b6709f85c6b89ec24ec5",
+    "lines": 4
+  },
+  {
+    "file": "frontend/lib/auth/validators.dart",
+    "new": true,
+    "sha256": "0bd604b8fadbf42b717d26613f7f2a21070818a1dfb5e05a5663597778157cce",
+    "lines": 36
+  },
+  {
+    "file": "mod-server/pom.xml",
+    "new": false,
+    "sha256": "c4537a01d609b18e76cdd3810e85767c6ffa8affb0e7c37e9992d2ebdafc47da",
+    "lines": 24
+  },
+  {
+    "file": "mod-server/src/main/resources/application.yml",
+    "new": false,
+    "sha256": "efe55389f3b92b73d851ac5f7e3c60bac0486edd485f0a23eb4d1a714c209891",
+    "lines": 41
+  },
+  {
+    "file": "mod-server/src/main/resources/db/migration/V3__community_auth.sql",
+    "new": true,
+    "sha256": "c3922225683144072753f1365bdc47dfdd0924fa68479d09eb0a5f2cb9f23893",
+    "lines": 42
+  },
+  {
+    "file": "mod-server/src/main/resources/db/migration/V4__user_progress.sql",
+    "new": true,
+    "sha256": "c76998bf9866712210a117a5761995cb967f7571bf3c9d50902308bfe1fa7d76",
+    "lines": 8
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/api/CorsConfig.java",
+    "new": false,
+    "sha256": "d06ce10ee0f8bc5cc50b9c8221191c4d583ee34a8c283d05d6772c47e9298573",
+    "lines": 19
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/api/ApiErrors.java",
+    "new": false,
+    "sha256": "cd33be74f388615d4dd88d5ce719e831e42fef1e8ad26d30d9ea02d6989dd49c",
+    "lines": 26
+  },
+  {
+    "file": "mod-server/src/test/resources/application.yml",
+    "new": false,
+    "sha256": "18a3a8e1683b5325d59f13b1718f6fcfb8719ea82f3fc6b8898c1851ce049eef",
+    "lines": 16
+  },
+  {
+    "file": "mod-server/src/test/java/com/planblindbox/mod/ModCatalogIntegrationTest.java",
+    "new": false,
+    "sha256": "0d27bb062574e4ee2c14d5bc7c6c2e65f85af7185307d8dd28ffa29ae9a27814",
+    "lines": 56
+  },
+  {
+    "file": "mod-server/src/test/java/com/planblindbox/mod/RankingIntegrationTest.java",
+    "new": false,
+    "sha256": "a0fa6408df8e5ae024df1ee0e9dbce84827a14e41033e592e1a17105965e114a",
+    "lines": 62
+  },
+  {
+    "file": "mod-server/src/test/java/com/planblindbox/mod/ConcurrentDownloadIntegrationTest.java",
+    "new": false,
+    "sha256": "3e216d70527c809deb974af088fcb1777adffa5195ee20abdfd8fc7711681fb0",
+    "lines": 120
+  },
+  {
+    "file": "mod-server/src/test/java/com/planblindbox/mod/AuthIntegrationTest.java",
+    "new": true,
+    "sha256": "c540e1d8d9eb20e2dbf8d3f528c91db9ea049d5c9e406e7fac0efffadc353fa1",
+    "lines": 54
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/AuthController.java",
+    "new": true,
+    "sha256": "0996b770facee32cb541a90b7935432c99c605fdcc823cc566a61c95ffe8a87d",
+    "lines": 25
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/AuthService.java",
+    "new": true,
+    "sha256": "14fc0cfae8888643dc5b6a1c12d34e4447321f65a48ac0a63d6c9fa09734a7ed",
+    "lines": 60
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/JwtConfig.java",
+    "new": true,
+    "sha256": "4c274095f77cb387da0188ab54a919e6cbaca6f5e4e9ac6684d3d5b39b7f0cee",
+    "lines": 51
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/MailExecutorConfig.java",
+    "new": true,
+    "sha256": "d830cf9691689c398cc986b13c1143c6bcc782d53566497067e6360f02e8e367",
+    "lines": 16
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/PasswordMailService.java",
+    "new": true,
+    "sha256": "5f1954908caa5317a9d603a39ed4da4e73b09a17fae352c75c8780882fccdc70",
+    "lines": 40
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/PasswordResetController.java",
+    "new": true,
+    "sha256": "c784fb3cd9a81aafe7abc72d32d5984815b3a33531497566bf3db96dcaf4e6f4",
+    "lines": 19
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/PasswordResetService.java",
+    "new": true,
+    "sha256": "0776fdfff6688cbfc368cbe35c301cdf348a88bf72fa709c6ce3e0b4e1fde326",
+    "lines": 128
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/PasswordRules.java",
+    "new": true,
+    "sha256": "a42b3efa4ff60525d80a52fe68d1ba4d74b1079cafee1082bdec75f031133349",
+    "lines": 34
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/SecurityConfig.java",
+    "new": true,
+    "sha256": "d07ebe5746ff3b3f86052c9f822bfd6aad70dfa1f1d4106daa37c9219d6aeef8",
+    "lines": 53
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/TokenService.java",
+    "new": true,
+    "sha256": "86b47f40a3ef754004a1be957b7faef1139462abf7ef21b35fb301b132f52449",
+    "lines": 29
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/auth/UserRepository.java",
+    "new": true,
+    "sha256": "a089ac8adada2d42916f1619ebbf98356f5a1a7390fce4e5a594aebf58f91c73",
+    "lines": 53
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/profile/AvatarController.java",
+    "new": true,
+    "sha256": "8717508eabbd40d73ff10bfa3a9a415929cbec2ca5488122d1fa971dfe9b3de7",
+    "lines": 10
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/profile/AvatarStorage.java",
+    "new": true,
+    "sha256": "c4b5eca334ff6799dae351f1481089a94555bfbf625449cc31ca67ea8a13ce79",
+    "lines": 65
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/profile/ProfileController.java",
+    "new": true,
+    "sha256": "db5a5e0f3d15057a878617f508d1f7125c245c4aa00df6147708bb7ee07e3412",
+    "lines": 27
+  },
+  {
+    "file": "mod-server/src/main/java/com/planblindbox/mod/sync/ProgressController.java",
+    "new": true,
+    "sha256": "bfc977e6c01e0140b8cd42d3870e4813f369c99da4abd120cecad6afa31eeefd",
+    "lines": 51
+  }
+]

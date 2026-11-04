@@ -4,6 +4,9 @@ import '../data/today_api.dart';
 import '../models/today_models.dart';
 import 'collection_page.dart';
 import 'settings_page.dart';
+import '../auth/auth_session.dart';
+import '../auth/auth_pages.dart';
+import 'user_cloud_progress_page.dart';
 
 /// 「我的」一级页面。
 /// 资产来自本地 SQLite；等级与成长系统在后续版本接入。
@@ -11,10 +14,12 @@ class MyPage extends StatefulWidget {
   const MyPage({
     super.key,
     required this.api,
+    required this.auth,
     this.refreshToken = 0,
   });
 
   final TodayApi api;
+  final AuthSession auth;
   final int refreshToken;
 
   @override
@@ -68,6 +73,30 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
+  Future<void> _openAccount() async {
+    if (!widget.auth.isSignedIn) {
+      await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => LoginPage(session: widget.auth),
+      ));
+    } else {
+      await Navigator.of(context).push<void>(MaterialPageRoute(
+        builder: (_) => ProfilePage(session: widget.auth),
+      ));
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openCloudProgress() async {
+    if (!widget.auth.isSignedIn) {
+      await _openAccount();
+      if (!mounted || !widget.auth.isSignedIn) return;
+    }
+    await Navigator.of(context).push<void>(MaterialPageRoute(
+      builder: (_) => UserCloudProgressPage(api: widget.api, auth: widget.auth),
+    ));
+    if (mounted) _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final assets = _data?.assets;
@@ -91,7 +120,14 @@ class _MyPageState extends State<MyPage> {
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(18, 12, 18, 30),
           children: [
-            _profileCard(),
+            ListenableBuilder(
+              listenable: widget.auth,
+              builder: (context, _) => InkWell(
+                borderRadius: BorderRadius.circular(22),
+                onTap: _openAccount,
+                child: _profileCard(),
+              ),
+            ),
             const SizedBox(height: 20),
             _sectionTitle('我的资产', '当前账户余额'),
             const SizedBox(height: 10),
@@ -163,6 +199,26 @@ class _MyPageState extends State<MyPage> {
             _sectionTitle('个人内容', '管理已经获得的内容与进度'),
             const SizedBox(height: 10),
             _menuCard(
+              icon: Icons.manage_accounts_outlined,
+              iconColor: _forest,
+              title: '账号与个人资料',
+              subtitle: widget.auth.isSignedIn
+                  ? '${widget.auth.user?.username ?? ''} · ${widget.auth.user?.email ?? ''}'
+                  : '当前为游客，登录后可管理个人资料',
+              trailingLabel: widget.auth.isSignedIn ? '查看 / 编辑' : '邮箱登录',
+              onTap: _openAccount,
+            ),
+            const SizedBox(height: 10),
+            _menuCard(
+              icon: Icons.cloud_sync_outlined,
+              iconColor: _forest,
+              title: '账号云端进度',
+              subtitle: '手动上传或恢复 SQLite 计划快照',
+              trailingLabel: widget.auth.isSignedIn ? '进入同步' : '登录后可用',
+              onTap: _openCloudProgress,
+            ),
+            const SizedBox(height: 10),
+            _menuCard(
               icon: Icons.collections_bookmark_outlined,
               iconColor: _forest,
               title: '我的收藏',
@@ -194,7 +250,9 @@ class _MyPageState extends State<MyPage> {
     );
   }
 
-  Widget _profileCard() => Container(
+  Widget _profileCard() {
+    final avatarUrl = widget.auth.api.absoluteAvatarUrl(widget.auth.user?.avatar);
+    return Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(22),
@@ -220,30 +278,36 @@ class _MyPageState extends State<MyPage> {
                 color: Colors.white.withValues(alpha: 0.16),
                 borderRadius: BorderRadius.circular(19),
                 border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                image: avatarUrl == null ? null : DecorationImage(
+                    image: NetworkImage(avatarUrl), fit: BoxFit.cover),
               ),
-              child: const Icon(
+              child: avatarUrl == null ? const Icon(
                 Icons.person_outline_rounded,
                 size: 32,
                 color: Colors.white,
-              ),
+              ) : null,
             ),
             const SizedBox(width: 14),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '我的成长档案',
-                    style: TextStyle(
+                    widget.auth.isSignedIn
+                        ? widget.auth.user?.username ?? '我的成长档案'
+                        : '我的成长档案',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 19,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  SizedBox(height: 5),
+                  const SizedBox(height: 5),
                   Text(
-                    '认真完成每一天，积累自己的成长',
-                    style: TextStyle(
+                    widget.auth.isSignedIn
+                        ? widget.auth.user?.email ?? ''
+                        : '游客模式 · 计划保存在本机',
+                    style: const TextStyle(
                       color: Color(0xFFE1EBE3),
                       fontSize: 12,
                     ),
@@ -251,9 +315,11 @@ class _MyPageState extends State<MyPage> {
                 ],
               ),
             ),
+            const Icon(Icons.chevron_right, color: Colors.white),
           ],
         ),
       );
+  }
 
   Widget _sectionTitle(String title, String subtitle) => Row(
         crossAxisAlignment: CrossAxisAlignment.end,

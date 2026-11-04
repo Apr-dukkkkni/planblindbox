@@ -68,7 +68,12 @@ class LocalDatabase {
     return factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 4,
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) await _createCustomShopSchema(db);
+          if (oldVersion < 3) await _upgradeProductCategories(db);
+          if (oldVersion < 4) await _createWellbeingSchema(db);
+        },
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -322,6 +327,91 @@ class LocalDatabase {
       await db.execute(statement);
     }
     await _seedCatalog(db);
+    await _createCustomShopSchema(db);
+    await _upgradeProductCategories(db);
+    await _createWellbeingSchema(db);
+  }
+
+  /// 每日情绪、经期、日记（与账号资料分离），数据库升级只新增表，不清空旧数据。
+  Future<void> _createWellbeingSchema(DatabaseExecutor db) async {
+    await db.execute('''CREATE TABLE IF NOT EXISTS wellbeing_entries (
+      user_id INTEGER NOT NULL,
+      business_date TEXT NOT NULL,
+      mood_name TEXT,
+      mood_emoji TEXT,
+      period INTEGER NOT NULL DEFAULT 0 CHECK(period IN (0,1)),
+      diary TEXT NOT NULL DEFAULT '',
+      update_time TEXT NOT NULL,
+      PRIMARY KEY(user_id, business_date)
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS wellbeing_moods (
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      emoji TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(user_id, name),
+      UNIQUE(user_id, emoji)
+    )''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_wellbeing_diary_date ON wellbeing_entries(user_id, business_date)');
+  }
+
+  /// 自定义商品、购买与仓库，与现有盲盒业务独立。
+  Future<void> _createCustomShopSchema(Database db) async {
+    await db.execute('''CREATE TABLE IF NOT EXISTS custom_products (
+      product_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      image_base64 TEXT,
+      price_coin INTEGER NOT NULL CHECK(price_coin >= 0),
+      stock INTEGER NOT NULL DEFAULT 0 CHECK(stock >= 0),
+      kind TEXT NOT NULL CHECK(kind IN ('CONSUMABLE','COLLECTIBLE')),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      create_time TEXT NOT NULL,
+      update_time TEXT NOT NULL
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS custom_inventory (
+      user_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+      update_time TEXT NOT NULL,
+      PRIMARY KEY (user_id, product_id),
+      FOREIGN KEY(product_id) REFERENCES custom_products(product_id)
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS custom_purchase_records (
+      purchase_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      request_id TEXT NOT NULL,
+      price_coin INTEGER NOT NULL,
+      create_time TEXT NOT NULL,
+      UNIQUE(user_id, request_id),
+      FOREIGN KEY(product_id) REFERENCES custom_products(product_id)
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS custom_use_records (
+      use_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      create_time TEXT NOT NULL,
+      FOREIGN KEY(product_id) REFERENCES custom_products(product_id)
+    )''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_custom_products_user ON custom_products(user_id, enabled, product_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_custom_purchases_user ON custom_purchase_records(user_id, create_time)');
+  }
+
+  /// 商品种类和消耗属性彼此独立，旧商品自动归入「默认」。
+  Future<void> _upgradeProductCategories(Database db) async {
+    await db.execute('''CREATE TABLE IF NOT EXISTS custom_product_categories (
+      category_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      UNIQUE(user_id, name)
+    )''');
+    final columns = await db.rawQuery('PRAGMA table_info(custom_products)');
+    if (!columns.any((column) => column['name'] == 'category_name')) {
+      await db.execute("ALTER TABLE custom_products ADD COLUMN category_name TEXT NOT NULL DEFAULT '默认'");
+    }
   }
 
   Future<void> _seedCatalog(DatabaseExecutor db) async {

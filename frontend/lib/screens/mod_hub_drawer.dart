@@ -4,13 +4,15 @@ import '../data/today_api.dart';
 import '../services/mod_registry.dart';
 import '../services/mod_import_flow.dart';
 import 'mod_marketplace_page.dart';
+import '../auth/auth_session.dart';
 
 /// Leaf drawer: discovery/import at top-right, installed template shortcuts below.
 /// Enable/disable and installed-Mod administration belong exclusively to Settings.
 class ModHubDrawer extends StatefulWidget {
-  const ModHubDrawer({super.key, required this.api});
+  const ModHubDrawer({super.key, required this.api, required this.auth});
 
   final TodayApi api;
+  final AuthSession auth;
 
   @override
   State<ModHubDrawer> createState() => _ModHubDrawerState();
@@ -53,7 +55,7 @@ class _ModHubDrawerState extends State<ModHubDrawer> {
     final navigator = Navigator.of(context);
     navigator.pop(); // close drawer before opening a route
     await navigator.push<void>(
-      MaterialPageRoute<void>(builder: (_) => ModMarketplacePage(api: widget.api)),
+      MaterialPageRoute<void>(builder: (_) => ModMarketplacePage(api: widget.api, auth: widget.auth)),
     );
     if (mounted) await _reload();
   }

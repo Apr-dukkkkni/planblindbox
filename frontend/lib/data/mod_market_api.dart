@@ -2,10 +2,13 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
+import '../auth/auth_session.dart';
+import '../auth/auth_api.dart';
 
 /// 独立在线 Mod 市场客户端。绝不用于个人任务、习惯、资产读写。
 class ModMarketApi {
-  ModMarketApi({http.Client? client}) : _client = client ?? http.Client();
+  ModMarketApi({this.session, http.Client? client}) : _client = client ?? http.Client();
+  final AuthSession? session;
   final http.Client _client;
 
   static const String baseUrl = String.fromEnvironment(
@@ -31,6 +34,16 @@ class ModMarketApi {
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
     if (decoded is! List) throw const FormatException('市场数据格式异常');
     return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Mod detail is public; manifest content requires login.
+  Future<Map<String, dynamic>> detail(String id) async {
+    final response=await _client.get(_url('/api/v1/mods/${Uri.encodeComponent(id)}'))
+        .timeout(const Duration(seconds: 12));
+    if(response.statusCode!=200) throw StateError('获取 Mod 详情失败：HTTP ${response.statusCode}');
+    final decoded=jsonDecode(utf8.decode(response.bodyBytes));
+    if(decoded is! Map) throw const FormatException('Mod 详情格式错误');
+    return Map<String,dynamic>.from(decoded);
   }
 
   /// 下载排行榜：有 Redis 时读缓存，关闭排行榜或 Redis 故障时由后端回退 MySQL。
@@ -60,12 +73,21 @@ class ModMarketApi {
   Future<String> download(String id, String version, {String? requestId}) async {
     final uri = _url('/api/v1/mods/${Uri.encodeComponent(id)}/versions/'
         '${Uri.encodeComponent(version)}/download');
+    final token = session?.token;
+    if (token == null) throw const AuthApiException('请先登录再下载 Mod', 401);
     final response = await _client.post(
       uri,
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
       body: jsonEncode({'requestId': requestId ?? _requestId()}),
     ).timeout(const Duration(seconds: 12));
     if (response.statusCode != 200) {
+      if (response.statusCode == 401) {
+        final activeSession = session;
+        if (activeSession != null) {
+          await activeSession.expireSession();
+        }
+        throw const AuthApiException('登录已过期，请重新登录', 401);
+      }
       throw StateError('下载失败：HTTP ${response.statusCode}');
     }
     final body = jsonDecode(utf8.decode(response.bodyBytes));

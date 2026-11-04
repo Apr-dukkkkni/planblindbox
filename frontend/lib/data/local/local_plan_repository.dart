@@ -45,6 +45,8 @@ class LocalPlanRepository {
     'time_records',
     'asset_records',
     'daily_sign_ins',
+    'wellbeing_entries',
+    'wellbeing_moods',
     'content_packs',
     'collectible_items',
     'user_collectibles',
@@ -52,10 +54,22 @@ class LocalPlanRepository {
     'shop_boxes',
     'shop_rewards',
     'shop_open_records',
+    'custom_product_categories',
+    'custom_products',
+    'custom_inventory',
+    'custom_purchase_records',
+    'custom_use_records',
     'app_settings',
   ];
 
   static const _restoreDeleteOrder = <String>[
+    'wellbeing_entries',
+    'wellbeing_moods',
+    'custom_use_records',
+    'custom_purchase_records',
+    'custom_inventory',
+    'custom_products',
+    'custom_product_categories',
     'shop_open_records',
     'collectible_acquisition_records',
     'user_collectibles',
@@ -89,11 +103,18 @@ class LocalPlanRepository {
     'task_categories',
     'user_assets',
     'daily_sign_ins',
+    'wellbeing_moods',
+    'wellbeing_entries',
     'time_records',
     'asset_records',
     'user_collectibles',
     'collectible_acquisition_records',
     'shop_open_records',
+    'custom_product_categories',
+    'custom_products',
+    'custom_inventory',
+    'custom_purchase_records',
+    'custom_use_records',
     'app_settings',
   ];
 
@@ -106,6 +127,8 @@ class LocalPlanRepository {
     '习惯': 'habits',
     '习惯打卡': 'habit_records',
     '每日签到': 'daily_sign_ins',
+    '心情及日记': 'wellbeing_entries',
+    '自定义情绪': 'wellbeing_moods',
     '时间记录': 'time_records',
     '资产流水': 'asset_records',
     '收藏内容包': 'content_packs',
@@ -115,6 +138,11 @@ class LocalPlanRepository {
     '盲盒商品': 'shop_boxes',
     '盲盒奖励池': 'shop_rewards',
     '盲盒记录': 'shop_open_records',
+    '自定义商品种类': 'custom_product_categories',
+    '自定义商品': 'custom_products',
+    '自定义商品仓库': 'custom_inventory',
+    '自定义购买记录': 'custom_purchase_records',
+    '自定义商品使用记录': 'custom_use_records',
     '应用偏好': 'app_settings',
   };
 
@@ -1487,43 +1515,169 @@ class LocalPlanRepository {
     };
   }
 
+
   Future<Map<String, dynamic>> getCalendarMonth(DateTime month) async {
     final db = await _db;
     final first = DateTime(month.year, month.month, 1);
     final last = DateTime(month.year, month.month + 1, 0);
-    final taskRows = await db.rawQuery('''
-      SELECT tr.record_date, COUNT(*) AS count
-      FROM task_records tr JOIN tasks t ON t.task_id = tr.task_id
-      WHERE t.user_id = ? AND tr.status = 'COMPLETED'
-        AND tr.record_date BETWEEN ? AND ? GROUP BY tr.record_date
-    ''', [userId, _date(first), _date(last)]);
-    final habitRows = await db.rawQuery('''
-      SELECT hr.record_date, COUNT(*) AS count
-      FROM habit_records hr JOIN habits h ON h.habit_id = hr.habit_id
-      WHERE h.user_id = ? AND hr.status = 'COMPLETED'
-        AND hr.record_date BETWEEN ? AND ? GROUP BY hr.record_date
-    ''', [userId, _date(first), _date(last)]);
+
+    // 1. 获取用户的全部任务和习惯
+    final taskRows = await db.query(
+      'tasks',
+      where: 'user_id = ?',
+      whereArgs: [userId],
+    );
+
+    final habitRows = await db.query(
+      'habits',
+      where: 'user_id = ?',
+      whereArgs: [userId],
+    );
+
+    // 2. 一次性查询本月任务执行记录
+    final taskRecordRows = await db.rawQuery('''
+    SELECT tr.record_date, tr.task_id, tr.status
+    FROM task_records tr
+    JOIN tasks t ON t.task_id = tr.task_id
+    WHERE t.user_id = ?
+      AND tr.record_date BETWEEN ? AND ?
+  ''', [userId, _date(first), _date(last)]);
+
+    // 3. 一次性查询本月习惯打卡记录
+    final habitRecordRows = await db.rawQuery('''
+    SELECT hr.record_date, hr.habit_id, hr.status
+    FROM habit_records hr
+    JOIN habits h ON h.habit_id = hr.habit_id
+    WHERE h.user_id = ?
+      AND hr.record_date BETWEEN ? AND ?
+  ''', [userId, _date(first), _date(last)]);
+
+    // 4. 按日期记录已经存在的任务记录
+    final taskRecordMap = <String, Set<int>>{};
+    final completedTaskMap = <String, Set<int>>{};
+
+    for (final row in taskRecordRows) {
+      final key = row['record_date'].toString();
+      final id = _int(row['task_id']);
+
+      taskRecordMap.putIfAbsent(key, () => <int>{}).add(id);
+
+      if (row['status'] == 'COMPLETED') {
+        completedTaskMap.putIfAbsent(key, () => <int>{}).add(id);
+      }
+    }
+
+    // 5. 按日期记录已经存在的习惯记录
+    final habitRecordMap = <String, Set<int>>{};
+    final completedHabitMap = <String, Set<int>>{};
+
+    for (final row in habitRecordRows) {
+      final key = row['record_date'].toString();
+      final id = _int(row['habit_id']);
+
+      habitRecordMap.putIfAbsent(key, () => <int>{}).add(id);
+
+      if (row['status'] == 'COMPLETED') {
+        completedHabitMap.putIfAbsent(key, () => <int>{}).add(id);
+      }
+    }
+
+    // 6. 查询时间记录
     final timeRows = await db.rawQuery('''
-      SELECT record_date, COUNT(*) AS count, COALESCE(SUM(duration_minutes), 0) AS minutes
-      FROM time_records WHERE user_id = ? AND record_date BETWEEN ? AND ? GROUP BY record_date
-    ''', [userId, _date(first), _date(last)]);
-    final taskMap = {for (final r in taskRows) r['record_date'].toString(): _int(r['count'])};
-    final habitMap = {for (final r in habitRows) r['record_date'].toString(): _int(r['count'])};
-    final timeMap = {for (final r in timeRows) r['record_date'].toString(): r};
+    SELECT record_date,
+           COUNT(*) AS count,
+           COALESCE(SUM(duration_minutes), 0) AS minutes
+    FROM time_records
+    WHERE user_id = ?
+      AND record_date BETWEEN ? AND ?
+    GROUP BY record_date
+  ''', [userId, _date(first), _date(last)]);
+
+    final timeMap = {
+      for (final r in timeRows)
+        r['record_date'].toString(): r
+    };
+
+    // 7. 逐日计算统计数据
     final days = <Map<String, dynamic>>[];
-    for (var date = first; !date.isAfter(last); date = date.add(const Duration(days: 1))) {
+
+    for (var date = first;
+    !date.isAfter(last);
+    date = date.add(const Duration(days: 1))) {
+
       final key = _date(date);
+
+      // 与 getCalendarDay 保持相同的业务日定义
+      final dayStart = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        5,
+      );
+      final dayEnd = dayStart.add(const Duration(days: 1));
+
+      final dayTaskRecords =
+          taskRecordMap[key] ?? const <int>{};
+
+      final dayHabitRecords =
+          habitRecordMap[key] ?? const <int>{};
+
+      // 8. 计算当天应完成的任务数
+      final requiredTasks = taskRows.where((raw) {
+        final task = Map<String, Object?>.from(raw);
+        final id = _int(task['task_id']);
+
+        // 有执行记录，或者当天符合任务周期
+        return dayTaskRecords.contains(id) ||
+            _isTaskScheduledForBusinessDay(
+              task,
+              dayStart,
+              dayEnd,
+            );
+      }).length;
+
+      // 9. 计算当天应打卡的习惯数
+      final requiredHabits = habitRows.where((raw) {
+        final habit = Map<String, Object?>.from(raw);
+        final id = _int(habit['habit_id']);
+
+        // 有历史记录的归档习惯也保留
+        return dayHabitRecords.contains(id) ||
+            (habit['status'] != 'ARCHIVED' &&
+                _isHabitScheduled(habit, date));
+      }).length;
+
       final time = timeMap[key];
+
+      // 10. 生成当天统计结果
       days.add({
         'date': key,
-        'completedTasks': taskMap[key] ?? 0,
-        'habitCheckIns': habitMap[key] ?? 0,
+
+        // 已完成数量
+        'completedTasks':
+        completedTaskMap[key]?.length ?? 0,
+
+        'habitCheckIns':
+        completedHabitMap[key]?.length ?? 0,
+
+        // 当天计划数量：新增字段
+        'requiredTasks': requiredTasks,
+        'requiredHabits': requiredHabits,
+
+        // 时间记录保持原有逻辑
         'timeRecordCount': _int(time?['count']),
         'timeMinutes': _int(time?['minutes']),
       });
     }
-    return {'month': '${month.year.toString().padLeft(4, '0')}-${month.month.toString().padLeft(2, '0')}', 'days': days};
+
+    return {
+      'month':
+      '${month.year.toString().padLeft(4, '0')}-'
+          '${month.month.toString().padLeft(2, '0')}',
+      'days': days,
+    };
   }
+
 
   Future<Map<String, dynamic>> getCalendarDay(String date) async {
     final parsed = DateTime.tryParse(date);
@@ -1753,7 +1907,11 @@ class LocalPlanRepository {
     final db = await _db;
     final backupDatabaseVersion = _int(decoded['databaseVersion'], -1);
     final currentDatabaseVersion = await db.getVersion();
-    if (backupDatabaseVersion != currentDatabaseVersion) {
+    final restoreLegacyV1 = backupDatabaseVersion == 1 && currentDatabaseVersion == 4;
+    final restoreLegacyV2 = backupDatabaseVersion == 2 && currentDatabaseVersion == 4;
+    final restoreLegacyV3 = backupDatabaseVersion == 3 && currentDatabaseVersion == 4;
+    if (backupDatabaseVersion != currentDatabaseVersion &&
+        !restoreLegacyV1 && !restoreLegacyV2 && !restoreLegacyV3) {
       throw ApiException(
         '备份数据库版本为 $backupDatabaseVersion，当前版本为 $currentDatabaseVersion，暂不支持跨版本恢复',
         statusCode: 400,
@@ -1766,13 +1924,17 @@ class LocalPlanRepository {
     final prepared = <String, List<Map<String, Object?>>>{};
     for (final table in _backupTables) {
       final rawRows = rawTables[table];
-      if (rawRows is! List) {
+      if (rawRows is! List && !((restoreLegacyV1 || restoreLegacyV2) &&
+          table == 'custom_product_categories') && !((restoreLegacyV1 || restoreLegacyV2 || restoreLegacyV3) &&
+          const {'wellbeing_entries', 'wellbeing_moods'}.contains(table)) && !(restoreLegacyV1 &&
+          const {'custom_products', 'custom_inventory',
+            'custom_purchase_records', 'custom_use_records'}.contains(table))) {
         throw ApiException('备份文件缺少数据表：$table', statusCode: 400);
       }
       final columnRows = await db.rawQuery('PRAGMA table_info($table)');
       final allowedColumns = columnRows.map((row) => row['name'].toString()).toSet();
       final rows = <Map<String, Object?>>[];
-      for (final rawRow in rawRows) {
+      for (final rawRow in (rawRows is List ? rawRows : const [])) {
         if (rawRow is! Map) throw ApiException('数据表 $table 中存在无效记录', statusCode: 400);
         final row = <String, Object?>{};
         for (final entry in rawRow.entries) {
@@ -1814,6 +1976,13 @@ class LocalPlanRepository {
     final db = await _db;
     await db.transaction((txn) async {
       const tables = <String>[
+        'wellbeing_entries',
+        'wellbeing_moods',
+        'custom_use_records',
+        'custom_purchase_records',
+        'custom_inventory',
+        'custom_products',
+        'custom_product_categories',
         'shop_open_records',
         'collectible_acquisition_records',
         'user_collectibles',
@@ -1856,6 +2025,10 @@ class LocalPlanRepository {
       ('daily_sign_ins', 'create_time'),
       ('asset_records', 'create_time'),
       ('shop_open_records', 'created_at'),
+      ('custom_products', 'update_time'),
+      ('custom_inventory', 'update_time'),
+      ('custom_purchase_records', 'create_time'),
+      ('custom_use_records', 'create_time'),
     ];
     for (final query in latestQueries) {
       final rows = await db.rawQuery(

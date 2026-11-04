@@ -1,0 +1,2385 @@
+--- a/frontend/lib/main.dart
++++ b/frontend/lib/main.dart
+@@ -1,6 +1,8 @@
+ 
+ import 'package:flutter/material.dart';
+ import 'config/api_config.dart';
++import 'data/mod_market_api.dart';
++import 'auth/planblindbox_auth.dart';
+ import 'data/local/local_database.dart';
+ import 'data/today_api.dart';
+ import 'theme/app_theme.dart';
+@@ -23,6 +25,15 @@
+ }
+ 
+ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
++  late final AuthSession _auth = AuthSession(AuthApi(baseUrl: ModMarketApi.baseUrl));
++  bool _firstLoginScreen = true;
++
++  @override
++  void initState() {
++    super.initState();
++    _auth.restore();
++  }
++
+   late final TodayApi _api = TodayApi(
+     baseUrl: ApiConfig.baseUrl,
+     userId: ApiConfig.userId,
+@@ -48,6 +59,8 @@
+   @override
+   void dispose() {
+     _api.dispose();
++    _auth.dispose();
++    _auth.api.dispose();
+     super.dispose();
+     _archive.dispose();
+   }
+@@ -93,8 +106,21 @@
+                       : const [],
+                 ),
+                 // 注意：使用已经定义好的 _api
+-                child: AppShell(api: _api,
+-                archiveController:_archive,
++                child: ListenableBuilder(
++                  listenable: _auth,
++                  builder: (context, _) {
++                    if (_auth.state == LoginState.loading) {
++                      return const Scaffold(body: Center(child: CircularProgressIndicator()));
++                    }
++                    if (_firstLoginScreen && !_auth.isSignedIn) {
++                      return LoginPage(
++                        session: _auth,
++                        onGuest: () => setState(() => _firstLoginScreen = false),
++                        onLoggedIn: () => setState(() => _firstLoginScreen = false),
++                      );
++                    }
++                    return AppShell(api: _api, auth: _auth, archiveController: _archive);
++                  },
+                 ),
+               ),
+             ),
+--- a/frontend/lib/data/mod_market_api.dart
++++ b/frontend/lib/data/mod_market_api.dart
+@@ -2,10 +2,13 @@
+ import 'dart:math';
+ import 'package:crypto/crypto.dart' as crypto;
+ import 'package:http/http.dart' as http;
++import '../auth/auth_session.dart';
++import '../auth/auth_api.dart';
+ 
+ /// 独立在线 Mod 市场客户端。绝不用于个人任务、习惯、资产读写。
+ class ModMarketApi {
+-  ModMarketApi({http.Client? client}) : _client = client ?? http.Client();
++  ModMarketApi({required this.session, http.Client? client}) : _client = client ?? http.Client();
++  final AuthSession session;
+   final http.Client _client;
+ 
+   static const String baseUrl = String.fromEnvironment(
+@@ -31,6 +34,16 @@
+     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+     if (decoded is! List) throw const FormatException('市场数据格式异常');
+     return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
++  }
++
++  /// Mod detail is public; manifest content requires login.
++  Future<Map<String, dynamic>> detail(String id) async {
++    final response=await _client.get(_url('/api/v1/mods/${Uri.encodeComponent(id)}'))
++        .timeout(const Duration(seconds: 12));
++    if(response.statusCode!=200) throw StateError('获取 Mod 详情失败：HTTP ${response.statusCode}');
++    final decoded=jsonDecode(utf8.decode(response.bodyBytes));
++    if(decoded is! Map) throw const FormatException('Mod 详情格式错误');
++    return Map<String,dynamic>.from(decoded);
+   }
+ 
+   /// 下载排行榜：有 Redis 时读缓存，关闭排行榜或 Redis 故障时由后端回退 MySQL。
+@@ -60,12 +73,18 @@
+   Future<String> download(String id, String version, {String? requestId}) async {
+     final uri = _url('/api/v1/mods/${Uri.encodeComponent(id)}/versions/'
+         '${Uri.encodeComponent(version)}/download');
++    final token = session.token;
++    if (token == null) throw const AuthApiException('请先登录再下载 Mod', 401);
+     final response = await _client.post(
+       uri,
+-      headers: {'Content-Type': 'application/json'},
++      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+       body: jsonEncode({'requestId': requestId ?? _requestId()}),
+     ).timeout(const Duration(seconds: 12));
+     if (response.statusCode != 200) {
++      if (response.statusCode == 401) {
++        await session.expireSession();
++        throw const AuthApiException('登录已过期，请重新登录', 401);
++      }
+       throw StateError('下载失败：HTTP ${response.statusCode}');
+     }
+     final body = jsonDecode(utf8.decode(response.bodyBytes));
+--- a/frontend/lib/screens/app_shell.dart
++++ b/frontend/lib/screens/app_shell.dart
+@@ -9,6 +9,7 @@
+ import 'mod_hub_drawer.dart';
+ import '../services/app_preferences.dart';
+ import '../services/cloud_archive_service.dart';
++import '../auth/auth_session.dart';
+ 
+ /// 一级导航容器：今日、时间、商店、统计、我的处于同一层级。
+ /// 复用同一个 TodayApi 作为本地核心业务入口。
+@@ -16,10 +17,12 @@
+   const AppShell({
+     super.key,
+     required this.api,
++    required this.auth,
+     this.archiveController,
+   });
+ 
+   final TodayApi api;
++  final AuthSession auth;
+   final CloudArchiveController? archiveController;
+ 
+   @override
+@@ -108,7 +111,7 @@
+   Widget build(BuildContext context) {
+     return Scaffold(
+       key: _scaffoldKey,
+-      drawer: ModHubDrawer(api: widget.api),
++      drawer: ModHubDrawer(api: widget.api, auth: widget.auth),
+       body: IndexedStack(
+         index: _selectedIndex,
+         children: [
+@@ -133,6 +136,7 @@
+           ),
+           MyPage(
+             api: widget.api,
++            auth: widget.auth,
+             refreshToken: _myVersion,
+           ),
+         ],
+--- a/frontend/lib/screens/mod_hub_drawer.dart
++++ b/frontend/lib/screens/mod_hub_drawer.dart
+@@ -4,13 +4,15 @@
+ import '../services/mod_registry.dart';
+ import '../services/mod_import_flow.dart';
+ import 'mod_marketplace_page.dart';
++import '../auth/auth_session.dart';
+ 
+ /// Leaf drawer: discovery/import at top-right, installed template shortcuts below.
+ /// Enable/disable and installed-Mod administration belong exclusively to Settings.
+ class ModHubDrawer extends StatefulWidget {
+-  const ModHubDrawer({super.key, required this.api});
++  const ModHubDrawer({super.key, required this.api, required this.auth});
+ 
+   final TodayApi api;
++  final AuthSession auth;
+ 
+   @override
+   State<ModHubDrawer> createState() => _ModHubDrawerState();
+@@ -53,7 +55,7 @@
+     final navigator = Navigator.of(context);
+     navigator.pop(); // close drawer before opening a route
+     await navigator.push<void>(
+-      MaterialPageRoute<void>(builder: (_) => ModMarketplacePage(api: widget.api)),
++      MaterialPageRoute<void>(builder: (_) => ModMarketplacePage(api: widget.api, auth: widget.auth)),
+     );
+     if (mounted) await _reload();
+   }
+--- a/frontend/lib/screens/mod_marketplace_page.dart
++++ b/frontend/lib/screens/mod_marketplace_page.dart
+@@ -3,17 +3,20 @@
+ import '../data/mod_market_api.dart';
+ import '../data/today_api.dart';
+ import '../services/mod_registry.dart';
++import '../auth/auth_session.dart';
++import '../auth/auth_pages.dart';
+ 
+ /// 在线 Mod 浏览与授权安装；服务不可用时不影响任何离线功能。
+ class ModMarketplacePage extends StatefulWidget {
+-  const ModMarketplacePage({super.key, required this.api});
++  const ModMarketplacePage({super.key, required this.api, required this.auth});
+   final TodayApi api;
++  final AuthSession auth;
+   @override
+   State<ModMarketplacePage> createState() => _ModMarketplacePageState();
+ }
+ 
+ class _ModMarketplacePageState extends State<ModMarketplacePage> {
+-  final ModMarketApi _market = ModMarketApi();
++  late final ModMarketApi _market = ModMarketApi(session: widget.auth);
+   late final ModRegistry _registry = ModRegistry(widget.api.repository);
+   final TextEditingController _search = TextEditingController();
+   List<Map<String, dynamic>> _mods = [];
+@@ -42,8 +45,44 @@
+     }
+   }
+ 
++  Future<void> _openDetail(Map<String, dynamic> item) async {
++    try {
++      final detail=await _market.detail(item['id'] as String);
++      if (!mounted) return;
++      final versions = detail['versions'] is List ? detail['versions'] as List : const [];
++      await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
++        title: Text(detail['name']?.toString() ?? 'Mod 详情'),
++        content: SingleChildScrollView(child: Column(
++          mainAxisSize: MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,
++          children:[
++            Text('标识：${detail['id']}'),
++            const SizedBox(height:8),
++            Text('最新版本：${detail['latestVersion']}'),
++            const SizedBox(height:8),
++            Text(detail['description']?.toString() ?? ''),
++            const SizedBox(height:8),
++            Text('下载次数：${detail['downloads']}'),
++            const SizedBox(height:8),
++            Text('已发布版本：${versions.map((v)=> v is Map ? v['version'] : v).join('、')}'),
++            const SizedBox(height:12),
++            const Text('浏览详情无需登录；下载需登录账号。'),
++          ],
++        )),
++        actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('关闭'))],
++      ));
++    } catch(e){
++      if(mounted) ScaffoldMessenger.of(context).showSnackBar(
++        SnackBar(content:Text('读取 Mod 详情失败：$e')));
++    }
++  }
++
+   Future<void> _install(Map<String, dynamic> item) async {
+     if (_downloading != null) return;
++    if (!widget.auth.isSignedIn) {
++      await Navigator.of(context).push<bool>(MaterialPageRoute(
++          builder: (_) => LoginPage(session: widget.auth)));
++      if (!mounted || !widget.auth.isSignedIn) return;
++    }
+     final id = item['id'] as String;
+     final version = item['latestVersion'] as String;
+     setState(() => _downloading = id);
+@@ -126,6 +165,7 @@
+         itemBuilder: (context, index) {
+           final mod = _mods[index];
+           return Card(child: ListTile(
++            onTap: () => _openDetail(mod),
+             leading: _ranking ? CircleAvatar(child: Text('${index + 1}')) : null,
+             title: Text('${mod['name']} · v${mod['latestVersion']}'),
+             subtitle: Text('${mod['id']}\n${mod['description']}\n下载次数：${mod['downloads']}'),
+--- a/frontend/lib/screens/my_page.dart
++++ b/frontend/lib/screens/my_page.dart
+@@ -4,6 +4,9 @@
+ import '../models/today_models.dart';
+ import 'collection_page.dart';
+ import 'settings_page.dart';
++import '../auth/auth_session.dart';
++import '../auth/auth_pages.dart';
++import 'user_cloud_progress_page.dart';
+ 
+ /// 「我的」一级页面。
+ /// 资产来自本地 SQLite；等级与成长系统在后续版本接入。
+@@ -11,10 +14,12 @@
+   const MyPage({
+     super.key,
+     required this.api,
++    required this.auth,
+     this.refreshToken = 0,
+   });
+ 
+   final TodayApi api;
++  final AuthSession auth;
+   final int refreshToken;
+ 
+   @override
+@@ -66,6 +71,30 @@
+         setState(() => _loading = false);
+       }
+     }
++  }
++
++  Future<void> _openAccount() async {
++    if (!widget.auth.isSignedIn) {
++      await Navigator.of(context).push<bool>(MaterialPageRoute(
++        builder: (_) => LoginPage(session: widget.auth),
++      ));
++    } else {
++      await Navigator.of(context).push<void>(MaterialPageRoute(
++        builder: (_) => ProfilePage(session: widget.auth),
++      ));
++    }
++    if (mounted) setState(() {});
++  }
++
++  Future<void> _openCloudProgress() async {
++    if (!widget.auth.isSignedIn) {
++      await _openAccount();
++      if (!mounted || !widget.auth.isSignedIn) return;
++    }
++    await Navigator.of(context).push<void>(MaterialPageRoute(
++      builder: (_) => UserCloudProgressPage(api: widget.api, auth: widget.auth),
++    ));
++    if (mounted) _load();
+   }
+ 
+   @override
+@@ -91,7 +120,14 @@
+           physics: const AlwaysScrollableScrollPhysics(),
+           padding: const EdgeInsets.fromLTRB(18, 12, 18, 30),
+           children: [
+-            _profileCard(),
++            ListenableBuilder(
++              listenable: widget.auth,
++              builder: (context, _) => InkWell(
++                borderRadius: BorderRadius.circular(22),
++                onTap: _openAccount,
++                child: _profileCard(),
++              ),
++            ),
+             const SizedBox(height: 20),
+             _sectionTitle('我的资产', '当前账户余额'),
+             const SizedBox(height: 10),
+@@ -163,6 +199,26 @@
+             _sectionTitle('个人内容', '管理已经获得的内容与进度'),
+             const SizedBox(height: 10),
+             _menuCard(
++              icon: Icons.manage_accounts_outlined,
++              iconColor: _forest,
++              title: '账号与个人资料',
++              subtitle: widget.auth.isSignedIn
++                  ? '${widget.auth.user?.username ?? ''} · ${widget.auth.user?.email ?? ''}'
++                  : '当前为游客，登录后可管理个人资料',
++              trailingLabel: widget.auth.isSignedIn ? '查看 / 编辑' : '邮箱登录',
++              onTap: _openAccount,
++            ),
++            const SizedBox(height: 10),
++            _menuCard(
++              icon: Icons.cloud_sync_outlined,
++              iconColor: _forest,
++              title: '账号云端进度',
++              subtitle: '手动上传或恢复 SQLite 计划快照',
++              trailingLabel: widget.auth.isSignedIn ? '进入同步' : '登录后可用',
++              onTap: _openCloudProgress,
++            ),
++            const SizedBox(height: 10),
++            _menuCard(
+               icon: Icons.collections_bookmark_outlined,
+               iconColor: _forest,
+               title: '我的收藏',
+@@ -194,7 +250,9 @@
+     );
+   }
+ 
+-  Widget _profileCard() => Container(
++  Widget _profileCard() {
++    final avatarUrl = widget.auth.api.absoluteAvatarUrl(widget.auth.user?.avatar);
++    return Container(
+         padding: const EdgeInsets.all(18),
+         decoration: BoxDecoration(
+           borderRadius: BorderRadius.circular(22),
+@@ -220,30 +278,36 @@
+                 color: Colors.white.withValues(alpha: 0.16),
+                 borderRadius: BorderRadius.circular(19),
+                 border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+-              ),
+-              child: const Icon(
++                image: avatarUrl == null ? null : DecorationImage(
++                    image: NetworkImage(avatarUrl), fit: BoxFit.cover),
++              ),
++              child: avatarUrl == null ? const Icon(
+                 Icons.person_outline_rounded,
+                 size: 32,
+                 color: Colors.white,
+-              ),
++              ) : null,
+             ),
+             const SizedBox(width: 14),
+-            const Expanded(
++            Expanded(
+               child: Column(
+                 crossAxisAlignment: CrossAxisAlignment.start,
+                 children: [
+                   Text(
+-                    '我的成长档案',
+-                    style: TextStyle(
++                    widget.auth.isSignedIn
++                        ? widget.auth.user?.username ?? '我的成长档案'
++                        : '我的成长档案',
++                    style: const TextStyle(
+                       color: Colors.white,
+                       fontSize: 19,
+                       fontWeight: FontWeight.w800,
+                     ),
+                   ),
+-                  SizedBox(height: 5),
++                  const SizedBox(height: 5),
+                   Text(
+-                    '认真完成每一天，积累自己的成长',
+-                    style: TextStyle(
++                    widget.auth.isSignedIn
++                        ? widget.auth.user?.email ?? ''
++                        : '游客模式 · 计划保存在本机',
++                    style: const TextStyle(
+                       color: Color(0xFFE1EBE3),
+                       fontSize: 12,
+                     ),
+@@ -251,9 +315,11 @@
+                 ],
+               ),
+             ),
++            const Icon(Icons.chevron_right, color: Colors.white),
+           ],
+         ),
+       );
++  }
+ 
+   Widget _sectionTitle(String title, String subtitle) => Row(
+         crossAxisAlignment: CrossAxisAlignment.end,
+--- /dev/null
++++ b/frontend/lib/screens/user_cloud_progress_page.dart
+@@ -0,0 +1,119 @@
++import 'dart:convert';
++import 'package:flutter/material.dart';
++import '../auth/auth_api.dart';
++import '../auth/auth_session.dart';
++import '../data/today_api.dart';
++
++/// Manual cloud snapshots; this does not replace the existing WebDAV archive UI.
++class UserCloudProgressPage extends StatefulWidget {
++  const UserCloudProgressPage({super.key, required this.api, required this.auth});
++  final TodayApi api;
++  final AuthSession auth;
++  @override
++  State<UserCloudProgressPage> createState() => _UserCloudProgressPageState();
++}
++class _UserCloudProgressPageState extends State<UserCloudProgressPage> {
++  bool _busy = false;
++  CloudSnapshot? _remote;
++  String? _error;
++  @override
++  void initState() { super.initState(); _refresh(); }
++  Future<void> _refresh() async {
++    final token = widget.auth.token;
++    if(token == null) return;
++    setState(() {_busy = true;_error=null;});
++    try {
++      final remote = await widget.auth.api.getProgress(token);
++      if(mounted) setState(() => _remote = remote);
++    } on AuthApiException catch(e) {
++      if(e.statusCode == 404) {
++        if(mounted) setState(() => _remote = null);
++      } else {
++        if(e.statusCode == 401) await widget.auth.expireSession();
++        if(mounted) setState(() => _error = e.message);
++      }
++    } catch(e) {if(mounted) setState(() => _error = e.toString());}
++    finally {if(mounted) setState(() => _busy = false);}
++  }
++  Future<bool> _confirm(String title, String content) async =>
++      await showDialog<bool>(context: context,builder:(ctx)=>AlertDialog(
++        title: Text(title),content: Text(content),actions:[
++          TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('取消')),
++          FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('确认')),
++        ]))??false;
++  void _message(String text){if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));}
++  Future<void> _upload() async {
++    if(_busy || widget.auth.token==null) return;
++    final user = widget.auth.user!;
++    final owner = await widget.api.repository.getAppSetting('account_snapshot_owner_v1');
++    if(!mounted) return;
++    if(owner != null && owner.isNotEmpty && owner != user.userId.toString()) {
++      _message('本机进度已关联其他账号。请先备份并恢复正确账号的数据，禁止直接跨账号上传。');
++      return;
++    }
++    final proceed=await _confirm('上传本机进度？',
++      '将本机任务、习惯等 SQLite 快照上传到账号 ${user.email}。'
++      '${_remote == null ? '云端目前没有快照。' : '此操作会覆盖云端旧快照。'}'
++      '这是手动备份，不会自动合并。');
++    if(!proceed || !mounted)return;
++    setState(() => _busy=true);
++    try {
++      final raw=await widget.api.repository.exportBackupJson();
++      if(utf8.encode(raw).length>5*1024*1024) throw const AuthApiException('本机进度超过5MiB，请使用本地备份');
++      final parsed=jsonDecode(raw);
++      if(parsed is! Map<String,dynamic>) throw const FormatException('备份内容不是JSON对象');
++      await widget.auth.api.putProgress(widget.auth.token!,_remote?.revision??0,parsed);
++      await widget.api.repository.setAppSetting('account_snapshot_owner_v1',user.userId.toString());
++      if(mounted) _message('云端上传成功');
++    } on AuthApiException catch(e) {
++      if(e.statusCode==401) await widget.auth.expireSession();
++      _message('上传失败：${e.message}');
++    } catch(e) {_message('上传失败：$e');}
++    finally {if(mounted) setState(() => _busy=false);}
++    if(mounted) await _refresh();
++  }
++  Future<void> _restore() async {
++    if(_busy || _remote==null || widget.auth.token==null) return;
++    final proceed=await _confirm('恢复云端进度？',
++      '恢复将清空并替换本机任务、习惯、记录等数据！请先在“设置”导出本地备份。'
++      '不会自动合并，也不会修改其他设备的云端数据。确定继续？');
++    if(!proceed || !mounted) return;
++    setState(() => _busy=true);
++    try {
++      // Fetch latest before applying, not a previously cached copy.
++      final current=await widget.auth.api.getProgress(widget.auth.token!);
++      if(current==null)throw const AuthApiException('云端还没有快照');
++      if(_remote!.revision != current.revision)throw const AuthApiException('云端快照已更新，请刷新后确认');
++      await widget.api.repository.restoreBackupJson(jsonEncode(current.payload));
++      await widget.api.repository.setAppSetting('account_snapshot_owner_v1',widget.auth.user!.userId.toString());
++      _message('云端恢复成功，返回页面后刷新内容');
++    } on AuthApiException catch(e) {
++      if(e.statusCode==401) await widget.auth.expireSession();
++      _message('恢复失败：${e.message}');
++    } catch(e){_message('恢复失败：$e');}
++    finally {if(mounted) setState(() => _busy=false);}
++  }
++  @override
++  Widget build(BuildContext context)=>Scaffold(
++    appBar:AppBar(title:const Text('账号云端进度'),actions:[IconButton(
++      onPressed:_busy?null:_refresh,icon:const Icon(Icons.refresh))]),
++    body:ListView(padding:const EdgeInsets.all(20),children:[
++      const Icon(Icons.cloud_sync_outlined,size:58),
++      const SizedBox(height:16),
++      Text(widget.auth.user?.email??'',textAlign:TextAlign.center),
++      const SizedBox(height:16),
++      Text(_remote==null?'当前账号尚无云端快照':'云端快照修订版本：${_remote!.revision}'),
++      const SizedBox(height:10),
++      const Text('手动上传／恢复，不自动同步、不自动合并。原有坚果云存档功能不受影响。'),
++      const SizedBox(height:12),
++      if(_busy) const LinearProgressIndicator(),
++      if(_error!=null) Text(_error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
++      const SizedBox(height:20),
++      FilledButton.icon(onPressed:_busy?null:_upload,icon:const Icon(Icons.cloud_upload_outlined),label:const Text('上传本机进度')),
++      const SizedBox(height:12),
++      OutlinedButton.icon(onPressed:_busy || _remote==null?null:_restore,
++        icon:const Icon(Icons.cloud_download_outlined),label:const Text('从云端恢复到本机')),
++      const SizedBox(height:18),
++      const Text('提示：切换账号不会自动删除本机 SQLite 数据；上传时会检查已关联的账号，避免误把其他账号的数据上传。'),
++    ]));
++}
+--- /dev/null
++++ b/frontend/lib/auth/auth_api.dart
+@@ -0,0 +1,236 @@
++import 'dart:convert';
++import 'package:http/http.dart' as http;
++import 'package:image_picker/image_picker.dart';
++import 'validators.dart';
++
++class AuthApiException implements Exception {
++  final int? statusCode;
++  final String message;
++  const AuthApiException(this.message, [this.statusCode]);
++  @override
++  String toString() => message;
++}
++
++class UserProfile {
++  final int userId;
++  final String username;
++  final String email;
++  final String gender;
++  final String? avatar;
++  final String? birthday;
++  const UserProfile({required this.userId, required this.username,
++    required this.email, required this.gender, this.avatar, this.birthday});
++  factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
++    userId: (json['userId'] as num).toInt(),
++    username: json['username'] as String,
++    email: json['email'] as String,
++    gender: json['gender'] as String,
++    avatar: json['avatar'] as String?,
++    birthday: json['birthday'] as String?,
++  );
++}
++
++class LoginResult {
++  final String accessToken;
++  final int expiresIn;
++  final UserProfile user;
++  const LoginResult(this.accessToken, this.expiresIn, this.user);
++  factory LoginResult.fromJson(Map<String, dynamic> json) => LoginResult(
++    json['accessToken'] as String,
++    (json['expiresIn'] as num).toInt(),
++    UserProfile.fromJson(json['user'] as Map<String, dynamic>),
++  );
++}
++
++class ForgotResult {
++  final String challengeId;
++  const ForgotResult(this.challengeId);
++}
++
++class CloudSnapshot {
++  final int revision;
++  final int schemaVersion;
++  final Map<String,dynamic> payload;
++  CloudSnapshot(this.revision,this.schemaVersion,this.payload);
++  factory CloudSnapshot.fromJson(Map<String,dynamic> json)=>CloudSnapshot(
++    (json['revision'] as num).toInt(),(json['schemaVersion'] as num).toInt(),
++    Map<String,dynamic>.from(json['payload'] as Map));
++}
++
++class AuthApi {
++  /// Set by --dart-define=API_BASE_URL=https://your-host (no trailing slash).
++  final String baseUrl;
++  final http.Client _client;
++  AuthApi({required String baseUrl, http.Client? client})
++      : baseUrl = baseUrl.replaceAll(RegExp(r'/+$'), ''),
++        _client = client ?? http.Client();
++
++  Uri _uri(String path) {
++    if (baseUrl.isEmpty || !baseUrl.startsWith('http')) {
++      throw const AuthApiException('未配置 API_BASE_URL，请在打包时指定服务端地址');
++    }
++    return Uri.parse('$baseUrl$path');
++  }
++
++  String? absoluteAvatarUrl(String? url) {
++    if (url == null || url.trim().isEmpty) return null;
++    final uri = Uri.tryParse(url);
++    if (uri == null) return null;
++    if (uri.hasScheme && uri.scheme == 'https') return uri.toString();
++    if (uri.hasScheme) return null; // Do not render insecure or arbitrary schemes.
++    return _uri(url.startsWith('/') ? url : '/$url').toString();
++  }
++
++  Map<String, String> _headers([String? token]) => {
++    'Accept': 'application/json',
++    'Content-Type': 'application/json; charset=utf-8',
++    if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
++  };
++
++  Future<http.Response> _call(Future<http.Response> Function() request) async {
++    try {
++      return await request().timeout(const Duration(seconds: 15));
++    } on AuthApiException { rethrow; }
++    catch (_) { throw const AuthApiException('网络连接失败，请检查网络和服务器地址'); }
++  }
++
++  Object? _parse(http.Response response) {
++    if (response.bodyBytes.isEmpty) return null;
++    try { return jsonDecode(utf8.decode(response.bodyBytes)); }
++    catch (_) { return null; }
++  }
++
++  Map<String, dynamic> _requireObject(Object? body) {
++    if (body is Map<String, dynamic>) return body;
++    throw const AuthApiException('服务器响应格式不正确');
++  }
++
++  void _ensure(http.Response res, Set<int> allowed) {
++    if (allowed.contains(res.statusCode)) return;
++    final body = _parse(res);
++    final serverMessage = body is Map
++        ? (body['message'] ?? body['detail'] ?? body['error'])
++        : null;
++    String fallback;
++    switch (res.statusCode) {
++      case 400: fallback = '提交数据不符合要求'; break;
++      case 401: fallback = '邮箱或密码错误，或登录已过期'; break;
++      case 403: fallback = '没有操作权限'; break;
++      case 404: fallback = '接口不存在，请确认服务端已部署账号功能'; break;
++      case 409: fallback = '邮箱已经注册或数据存在冲突'; break;
++      case 413: fallback = '上传文件过大'; break;
++      case 429: fallback = '操作过于频繁，请稍后再试'; break;
++      case 503: fallback = '服务暂时不可用'; break;
++      default: fallback = '请求失败（HTTP ${res.statusCode}）';
++    }
++    throw AuthApiException(
++      serverMessage is String && serverMessage.isNotEmpty ? serverMessage : fallback,
++      res.statusCode,
++    );
++  }
++
++  Future<void> register({required String username, required String email,
++    required String password, required String gender}) async {
++    final res = await _call(() => _client.post(_uri('/api/v1/auth/register'),
++      headers: _headers(), body: jsonEncode({
++        'username': normalizedUsername(username), 'email': normalizedEmail(email),
++        'password': password, 'gender': gender,
++      })));
++    _ensure(res, {201});
++  }
++
++  Future<LoginResult> login(String email, String password) async {
++    final res = await _call(() => _client.post(_uri('/api/v1/auth/login'),
++      headers: _headers(), body: jsonEncode({
++        'email': normalizedEmail(email), 'password': password,
++      })));
++    _ensure(res, {200});
++    return LoginResult.fromJson(_requireObject(_parse(res)));
++  }
++
++  Future<ForgotResult> forgotPassword(String email) async {
++    final res = await _call(() => _client.post(_uri('/api/v1/auth/password/forgot'),
++      headers: _headers(), body: jsonEncode({'email': normalizedEmail(email)})));
++    _ensure(res, {202});
++    return ForgotResult(_requireObject(_parse(res))['challengeId'] as String);
++  }
++
++  Future<void> resetPassword({required String email, required String challengeId,
++    required String code, required String newPassword}) async {
++    final res = await _call(() => _client.post(_uri('/api/v1/auth/password/reset'),
++      headers: _headers(), body: jsonEncode({
++        'email': normalizedEmail(email), 'challengeId': challengeId,
++        'code': code, 'newPassword': newPassword,
++      })));
++    _ensure(res, {204});
++  }
++
++  Future<UserProfile> me(String token) async {
++    final res = await _call(() => _client.get(_uri('/api/v1/me'), headers: _headers(token)));
++    _ensure(res, {200});
++    return UserProfile.fromJson(_requireObject(_parse(res)));
++  }
++
++  Future<UserProfile> updateProfile(String token, {required String username,
++    required String gender, String? birthday}) async {
++    final res = await _call(() => _client.put(_uri('/api/v1/me'),
++      headers: _headers(token), body: jsonEncode({
++        'username': normalizedUsername(username), 'gender': gender,
++        'birthday': birthday,
++      })));
++    _ensure(res, {200});
++    return UserProfile.fromJson(_requireObject(_parse(res)));
++  }
++
++  Future<UserProfile> uploadAvatar(String token, XFile picked) async {
++    final bytes = await picked.readAsBytes();
++    if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) {
++      throw const AuthApiException('头像大小必须在 0～2 MiB 之间');
++    }
++    final request = http.MultipartRequest('POST', _uri('/api/v1/me/avatar'));
++    request.headers['Authorization'] = 'Bearer $token';
++    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: picked.name));
++    try {
++      final streamed = await _client.send(request).timeout(const Duration(seconds: 20));
++      final res = await http.Response.fromStream(streamed);
++      _ensure(res, {200});
++      // Avatar endpoint returns {avatar: "..."}; re-fetch canonical profile.
++      return me(token);
++    } on AuthApiException { rethrow; }
++    catch (_) { throw const AuthApiException('头像上传失败，请检查网络'); }
++  }
++
++  Future<UserProfile> deleteAvatar(String token) async {
++    final res = await _call(() => _client.delete(_uri('/api/v1/me/avatar'), headers: _headers(token)));
++    _ensure(res, {204});
++    return me(token);
++  }
++
++  Future<void> logout(String token) async {
++    final res = await _call(() => _client.post(_uri('/api/v1/auth/logout'), headers: _headers(token)));
++    _ensure(res, {204});
++  }
++
++  /// Use for a Mod download route after login. If 401, ask the caller to sign in again.
++  Future<http.Response> getWithToken(String path, String token) async {
++    final res = await _call(() => _client.get(_uri(path), headers: _headers(token)));
++    _ensure(res, {200});
++    return res;
++  }
++  Future<CloudSnapshot?> getProgress(String token) async {
++    final res=await _call(()=>_client.get(_uri('/api/v1/me/progress'),headers:_headers(token)));
++    if(res.statusCode==404)return null;
++    _ensure(res,{200});
++    return CloudSnapshot.fromJson(_requireObject(_parse(res)));
++  }
++
++  Future<int> putProgress(String token,int expectedRevision,Map<String,dynamic> payload) async {
++    final res=await _call(()=>_client.put(_uri('/api/v1/me/progress'),
++      headers:_headers(token),body:jsonEncode({'expectedRevision':expectedRevision,
++        'schemaVersion':1,'payload':payload})));
++    _ensure(res,{200});
++    return (_requireObject(_parse(res))['revision'] as num).toInt();
++  }
++
++  void dispose() => _client.close();
++}
+--- /dev/null
++++ b/frontend/lib/auth/auth_pages.dart
+@@ -0,0 +1,407 @@
++import 'package:flutter/material.dart';
++import 'package:image_picker/image_picker.dart';
++import 'auth_api.dart';
++import 'auth_session.dart';
++import 'validators.dart';
++
++void showAuthError(BuildContext context, Object error) {
++  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
++    content: Text(error is AuthApiException ? error.message : '操作失败，请稍后重试'),
++  ));
++}
++
++class AuthShell extends StatelessWidget {
++  final AuthSession session;
++  final Widget Function(BuildContext context, AuthSession session) homeBuilder;
++  const AuthShell({super.key, required this.session, required this.homeBuilder});
++  @override
++  Widget build(BuildContext context) => ListenableBuilder(
++    listenable: session,
++    builder: (context, _) => session.state == LoginState.loading
++      ? const Scaffold(body: Center(child: CircularProgressIndicator()))
++      : homeBuilder(context, session),
++  );
++}
++
++class LoginPage extends StatefulWidget {
++  final AuthSession session;
++  final String initialEmail;
++  final VoidCallback? onGuest;
++  final VoidCallback? onLoggedIn;
++  const LoginPage({super.key, required this.session, this.initialEmail = '',
++    this.onGuest, this.onLoggedIn});
++  @override
++  State<LoginPage> createState() => _LoginPageState();
++}
++
++class _LoginPageState extends State<LoginPage> {
++  final _formKey = GlobalKey<FormState>();
++  late final TextEditingController _email;
++  final _password = TextEditingController();
++  bool _busy = false, _showPassword = false;
++  @override
++  void initState() { super.initState(); _email = TextEditingController(text: widget.initialEmail); }
++  @override
++  void dispose() { _email.dispose(); _password.dispose(); super.dispose(); }
++
++  Future<void> _login() async {
++    if (!_formKey.currentState!.validate() || _busy) return;
++    setState(() => _busy = true);
++    try {
++      await widget.session.login(_email.text, _password.text);
++      if (!mounted) return;
++      if (widget.onLoggedIn != null) widget.onLoggedIn!();
++      else if (Navigator.of(context).canPop()) Navigator.of(context).pop(true);
++    } catch (e) { if (mounted) showAuthError(context, e); }
++    finally { if (mounted) setState(() => _busy = false); }
++  }
++
++  Future<void> _register() async {
++    final email = await Navigator.of(context).push<String>(MaterialPageRoute(
++      builder: (_) => RegisterPage(api: widget.session.api)));
++    if (!mounted) return;
++    if (email != null) { _email.text = email; _password.clear(); }
++  }
++
++  Future<void> _forgot() async {
++    final email = await Navigator.of(context).push<String>(MaterialPageRoute(
++      builder: (_) => ForgotPasswordPage(api: widget.session.api, initialEmail: _email.text)));
++    if (!mounted) return;
++    if (email != null) { _email.text = email; _password.clear(); }
++  }
++
++  @override
++  Widget build(BuildContext context) => Scaffold(
++    appBar: AppBar(title: const Text('邮箱登录')),
++    body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24),
++      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 430),
++        child: Form(key: _formKey, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
++          const Icon(Icons.lock_outline_rounded, size: 64),
++          const SizedBox(height: 18),
++          Text('欢迎使用 PlanBlindBox', style: Theme.of(context).textTheme.headlineSmall, textAlign: TextAlign.center),
++          const SizedBox(height: 28),
++          TextFormField(controller: _email, enabled: !_busy, keyboardType: TextInputType.emailAddress,
++            textInputAction: TextInputAction.next, autofillHints: const [AutofillHints.email],
++            decoration: const InputDecoration(labelText: '邮箱', prefixIcon: Icon(Icons.email_outlined), border: OutlineInputBorder()),
++            validator: emailError),
++          const SizedBox(height: 14),
++          TextFormField(controller: _password, enabled: !_busy, obscureText: !_showPassword,
++            onFieldSubmitted: (_) => _login(),
++            decoration: InputDecoration(labelText: '密码', prefixIcon: const Icon(Icons.lock_outline),
++              border: const OutlineInputBorder(), suffixIcon: IconButton(
++                onPressed: () => setState(() => _showPassword = !_showPassword),
++                icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility))),
++            validator: (v) => (v == null || v.isEmpty) ? '请输入密码' : null),
++          const SizedBox(height: 18),
++          FilledButton(onPressed: _busy ? null : _login, child: Padding(
++            padding: const EdgeInsets.symmetric(vertical: 12),
++            child: Text(_busy ? '正在登录…' : '登录'))),
++          Wrap(alignment: WrapAlignment.spaceBetween, children: [
++            TextButton(onPressed: _busy ? null : _register, child: const Text('注册账号')),
++            TextButton(onPressed: _busy ? null : _forgot, child: const Text('忘记密码？')),
++          ]),
++          const SizedBox(height: 8),
++          OutlinedButton.icon(onPressed: _busy ? null : () {
++            if (widget.onGuest != null) widget.onGuest!();
++            else if (Navigator.of(context).canPop()) Navigator.of(context).pop(false);
++          }, icon: const Icon(Icons.explore_outlined), label: const Text('游客进入（本地计划继续可用）')),
++        ]))))),
++  );
++}
++
++class RegisterPage extends StatefulWidget {
++  final AuthApi api;
++  const RegisterPage({super.key, required this.api});
++  @override
++  State<RegisterPage> createState() => _RegisterPageState();
++}
++
++class _RegisterPageState extends State<RegisterPage> {
++  final _key = GlobalKey<FormState>();
++  final _name = TextEditingController(), _email = TextEditingController(), _pass = TextEditingController();
++  String? _gender;
++  bool _busy = false, _obscure = true;
++  @override
++  void dispose() { _name.dispose(); _email.dispose(); _pass.dispose(); super.dispose(); }
++
++  Future<void> _submit() async {
++    if (!_key.currentState!.validate() || _busy) return;
++    setState(() => _busy = true);
++    try {
++      await widget.api.register(username: _name.text, email: _email.text,
++        password: _pass.text, gender: _gender!);
++      if (!mounted) return;
++      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('注册成功，请使用邮箱登录')));
++      Navigator.of(context).pop(normalizedEmail(_email.text));
++    } catch (e) { if (mounted) showAuthError(context, e); }
++    finally { if (mounted) setState(() => _busy = false); }
++  }
++
++  @override
++  Widget build(BuildContext context) => Scaffold(
++    appBar: AppBar(title: const Text('注册账号')),
++    body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24),
++      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 430),
++        child: Form(key: _key, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
++          Text('创建 PlanBlindBox 账号', style: Theme.of(context).textTheme.headlineSmall),
++          const SizedBox(height: 20),
++          TextFormField(controller: _name, enabled: !_busy, decoration: const InputDecoration(
++            labelText: '名称（可与其他人重名）', border: OutlineInputBorder()), validator: usernameError),
++          const SizedBox(height: 14),
++          TextFormField(controller: _email, enabled: !_busy, keyboardType: TextInputType.emailAddress,
++            decoration: const InputDecoration(labelText: '邮箱（登录账号）', border: OutlineInputBorder()), validator: emailError),
++          const SizedBox(height: 14),
++          TextFormField(controller: _pass, enabled: !_busy, obscureText: _obscure,
++            decoration: InputDecoration(labelText: '密码（8～64 字符且不超过 72 字节）',
++              border: const OutlineInputBorder(), suffixIcon: IconButton(
++                icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
++                onPressed: () => setState(() => _obscure = !_obscure))), validator: passwordError),
++          const SizedBox(height: 14),
++          DropdownButtonFormField<String>(value: _gender,
++            decoration: const InputDecoration(labelText: '性别（必选）', border: OutlineInputBorder()),
++            items: genderOptions.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
++            onChanged: _busy ? null : (v) => setState(() => _gender = v),
++            validator: (v) => v == null ? '请选择性别' : null),
++          const SizedBox(height: 22),
++          FilledButton(onPressed: _busy ? null : _submit, child: Padding(
++            padding: const EdgeInsets.symmetric(vertical: 12), child: Text(_busy ? '注册中…' : '注册'))),
++          const SizedBox(height: 8),
++          const Text('注册成功后返回邮箱登录。头像稍后可以在“我的资料”中设置。', textAlign: TextAlign.center),
++        ]))))),
++  );
++}
++
++class ForgotPasswordPage extends StatefulWidget {
++  final AuthApi api;
++  final String initialEmail;
++  const ForgotPasswordPage({super.key, required this.api, this.initialEmail = ''});
++  @override
++  State<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
++}
++
++class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
++  final _key = GlobalKey<FormState>();
++  late final TextEditingController _email;
++  bool _busy = false;
++  @override
++  void initState() { super.initState(); _email = TextEditingController(text: widget.initialEmail); }
++  @override
++  void dispose() { _email.dispose(); super.dispose(); }
++  Future<void> _submit() async {
++    if (!_key.currentState!.validate() || _busy) return;
++    setState(() => _busy = true);
++    try {
++      final res = await widget.api.forgotPassword(_email.text);
++      if (!mounted) return;
++      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:
++        Text('如果邮箱已注册，验证码会发送至该邮箱。请检查收件箱和垃圾邮件。')));
++      final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => ResetPasswordPage(
++        api: widget.api, email: normalizedEmail(_email.text), challengeId: res.challengeId)));
++      if (!mounted) return;
++      if (ok == true) Navigator.of(context).pop(normalizedEmail(_email.text));
++    } catch (e) { if (mounted) showAuthError(context, e); }
++    finally { if (mounted) setState(() => _busy = false); }
++  }
++  @override
++  Widget build(BuildContext context) => Scaffold(
++    appBar: AppBar(title: const Text('找回密码')),
++    body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24),
++      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 430),
++        child: Form(key: _key, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
++          const Icon(Icons.mark_email_read_outlined, size: 60),
++          const SizedBox(height: 16),
++          const Text('输入注册邮箱，获取 6 位验证码。验证码有效期 10 分钟。'),
++          const SizedBox(height: 20),
++          TextFormField(controller: _email, keyboardType: TextInputType.emailAddress,
++            decoration: const InputDecoration(labelText: '邮箱', border: OutlineInputBorder()), validator: emailError),
++          const SizedBox(height: 20),
++          FilledButton(onPressed: _busy ? null : _submit, child: Text(_busy ? '提交中…' : '发送验证码')),
++        ]))))),
++  );
++}
++
++class ResetPasswordPage extends StatefulWidget {
++  final AuthApi api;
++  final String email;
++  final String challengeId;
++  const ResetPasswordPage({super.key, required this.api, required this.email, required this.challengeId});
++  @override
++  State<ResetPasswordPage> createState() => _ResetPasswordPageState();
++}
++
++class _ResetPasswordPageState extends State<ResetPasswordPage> {
++  final _key = GlobalKey<FormState>();
++  final _code = TextEditingController(), _password = TextEditingController(), _confirm = TextEditingController();
++  bool _busy = false;
++  @override
++  void dispose() { _code.dispose(); _password.dispose(); _confirm.dispose(); super.dispose(); }
++  Future<void> _submit() async {
++    if (!_key.currentState!.validate() || _busy) return;
++    setState(() => _busy = true);
++    try {
++      await widget.api.resetPassword(email: widget.email, challengeId: widget.challengeId,
++        code: _code.text, newPassword: _password.text);
++      if (!mounted) return;
++      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('密码修改成功，请重新登录')));
++      Navigator.of(context).pop(true);
++    } catch (e) { if (mounted) showAuthError(context, e); }
++    finally { if (mounted) setState(() => _busy = false); }
++  }
++  @override
++  Widget build(BuildContext context) => Scaffold(
++    appBar: AppBar(title: const Text('设置新密码')),
++    body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24),
++      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 430),
++        child: Form(key: _key, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
++          Text('验证码已发送至 ${widget.email}（如果该邮箱存在）'),
++          const SizedBox(height: 16),
++          TextFormField(controller: _code, keyboardType: TextInputType.number, maxLength: 6,
++            decoration: const InputDecoration(labelText: '6 位邮箱验证码', border: OutlineInputBorder()),
++            validator: (v) => RegExp(r'^\d{6}$').hasMatch(v ?? '') ? null : '请输入 6 位数字验证码'),
++          const SizedBox(height: 12),
++          TextFormField(controller: _password, obscureText: true,
++            decoration: const InputDecoration(labelText: '新密码', border: OutlineInputBorder()), validator: passwordError),
++          const SizedBox(height: 12),
++          TextFormField(controller: _confirm, obscureText: true,
++            decoration: const InputDecoration(labelText: '确认新密码', border: OutlineInputBorder()),
++            validator: (v) => v == _password.text ? null : '两次密码不一致'),
++          const SizedBox(height: 22),
++          FilledButton(onPressed: _busy ? null : _submit, child: Text(_busy ? '修改中…' : '重置密码并返回登录')),
++        ]))))),
++  );
++}
++
++class ProfilePage extends StatefulWidget {
++  final AuthSession session;
++  const ProfilePage({super.key, required this.session});
++  @override
++  State<ProfilePage> createState() => _ProfilePageState();
++}
++
++class _ProfilePageState extends State<ProfilePage> {
++  final _key = GlobalKey<FormState>();
++  late final TextEditingController _name;
++  late String _gender;
++  DateTime? _birthday;
++  bool _busy = false;
++  @override
++  void initState() {
++    super.initState();
++    _name = TextEditingController(text: widget.session.user?.username ?? '');
++    _gender = widget.session.user?.gender ?? 'UNDISCLOSED';
++    _birthday = DateTime.tryParse(widget.session.user?.birthday ?? '');
++  }
++  @override
++  void dispose() { _name.dispose(); super.dispose(); }
++  String? get _birthdayString => _birthday == null ? null :
++    '${_birthday!.year.toString().padLeft(4,'0')}-${_birthday!.month.toString().padLeft(2,'0')}-${_birthday!.day.toString().padLeft(2,'0')}';
++
++  Future<void> _save() async {
++    if (!_key.currentState!.validate() || _busy) return;
++    final token = widget.session.token;
++    if (token == null) { showAuthError(context, const AuthApiException('请重新登录')); return; }
++    setState(() => _busy = true);
++    try {
++      final user = await widget.session.api.updateProfile(token, username: _name.text,
++        gender: _gender, birthday: _birthdayString);
++      await widget.session.setProfile(user);
++      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('资料已保存')));
++    } on AuthApiException catch (e) {
++      if (e.statusCode == 401 || e.statusCode == 403) await widget.session.expireSession();
++      if (mounted) showAuthError(context, e);
++    } catch (e) { if (mounted) showAuthError(context, e); }
++    finally { if (mounted) setState(() => _busy = false); }
++  }
++
++  Future<void> _avatarAction(bool delete) async {
++    final token = widget.session.token;
++    if (token == null || _busy) return;
++    XFile? picked;
++    if (!delete) {
++      try { picked = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1024, maxHeight: 1024); }
++      catch (e) { if (mounted) showAuthError(context, e); return; }
++      if (picked == null) return;
++    }
++    setState(() => _busy = true);
++    try {
++      final profile = delete ? await widget.session.api.deleteAvatar(token)
++        : await widget.session.api.uploadAvatar(token, picked!);
++      await widget.session.setProfile(profile);
++    } on AuthApiException catch (e) {
++      if (e.statusCode == 401 || e.statusCode == 403) await widget.session.expireSession();
++      if (mounted) showAuthError(context, e);
++    } catch (e) { if (mounted) showAuthError(context, e); }
++    finally { if (mounted) setState(() => _busy = false); }
++  }
++
++  Future<void> _logout({required bool localOnly}) async {
++    if (_busy) return;
++    setState(() => _busy = true);
++    try {
++      await widget.session.logout(localOnly: localOnly);
++      if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
++    } catch (e) { if (mounted) showAuthError(context, e); }
++    finally { if (mounted) setState(() => _busy = false); }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final user = widget.session.user;
++    if (user == null) return Scaffold(appBar: AppBar(title: const Text('我的资料')),
++      body: Center(child: FilledButton(onPressed: () => Navigator.of(context).pushReplacement(
++        MaterialPageRoute(builder: (_) => LoginPage(session: widget.session))),
++        child: const Text('请登录'))));
++    final avatarUrl = widget.session.api.absoluteAvatarUrl(user.avatar);
++    return Scaffold(appBar: AppBar(title: const Text('我的资料')),
++      body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24),
++        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 430),
++          child: Form(key: _key, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
++            Center(child: CircleAvatar(radius: 44,
++              backgroundImage: avatarUrl == null ? null : NetworkImage(avatarUrl),
++              child: avatarUrl == null ? const Icon(Icons.person, size: 48) : null)),
++            const SizedBox(height: 10),
++            Wrap(alignment: WrapAlignment.center, children: [
++              TextButton(onPressed: _busy ? null : () => _avatarAction(false), child: const Text('更换头像')),
++              TextButton(onPressed: _busy || user.avatar == null ? null : () => _avatarAction(true),
++                child: const Text('清除头像')),
++            ]),
++            const SizedBox(height: 20),
++            TextFormField(initialValue: user.email, readOnly: true, enabled: false,
++              decoration: const InputDecoration(labelText: '邮箱（不可修改）', border: OutlineInputBorder())),
++            const SizedBox(height: 14),
++            TextFormField(controller: _name, decoration: const InputDecoration(
++              labelText: '名称', border: OutlineInputBorder()), validator: usernameError),
++            const SizedBox(height: 14),
++            DropdownButtonFormField<String>(value: genderOptions.containsKey(_gender) ? _gender : 'UNDISCLOSED',
++              decoration: const InputDecoration(labelText: '性别', border: OutlineInputBorder()),
++              items: genderOptions.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
++              onChanged: _busy ? null : (v) { if (v != null) setState(() => _gender = v); }),
++            const SizedBox(height: 14),
++            ListTile(title: Text(_birthdayString == null ? '生日（未设置）' : '生日：$_birthdayString'),
++              subtitle: const Text('可选，可以清空'),
++              trailing: Wrap(mainAxisSize: MainAxisSize.min, children: [
++                IconButton(tooltip: '选择生日', icon: const Icon(Icons.calendar_month), onPressed: _busy ? null : () async {
++                  final picked = await showDatePicker(context: context, firstDate: DateTime(1900),
++                    lastDate: DateTime.now(), initialDate: _birthday ?? DateTime(2000));
++                  if (mounted && picked != null) setState(() => _birthday = picked);
++                }),
++                IconButton(tooltip: '清空生日', icon: const Icon(Icons.clear),
++                  onPressed: _busy ? null : () => setState(() => _birthday = null)),
++              ])),
++            const SizedBox(height: 18),
++            FilledButton(onPressed: _busy ? null : _save, child: Text(_busy ? '处理中…' : '保存资料')),
++            const Divider(height: 32),
++            OutlinedButton(onPressed: _busy ? null : () => _logout(localOnly: false),
++              child: const Text('退出登录（撤销所有设备凭证）')),
++            TextButton(onPressed: _busy ? null : () async {
++              final confirm = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
++                title: const Text('仅退出此设备？'),
++                content: const Text('服务器可能仍认为旧凭证有效，直到凭证过期。不会删除本地 SQLite 数据。'),
++                actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
++                  FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('继续'))]));
++              if (confirm == true) await _logout(localOnly: true);
++            }, child: const Text('仅退出此设备')),
++          ]))))),
++    );
++  }
++}
+--- /dev/null
++++ b/frontend/lib/auth/auth_session.dart
+@@ -0,0 +1,86 @@
++import 'package:flutter/foundation.dart';
++import 'package:flutter_secure_storage/flutter_secure_storage.dart';
++import 'auth_api.dart';
++
++enum LoginState { loading, guest, signedIn, offline }
++
++class AuthSession extends ChangeNotifier {
++  final AuthApi api;
++  final FlutterSecureStorage storage;
++  LoginState state = LoginState.loading;
++  UserProfile? user;
++  String? _accessToken;
++  AuthSession(this.api, {FlutterSecureStorage? storage})
++      : storage = storage ?? const FlutterSecureStorage();
++
++  String? get token => state == LoginState.signedIn ? _accessToken : null;
++  bool get isSignedIn => state == LoginState.signedIn;
++
++  Future<void> restore() async {
++    state = LoginState.loading; notifyListeners();
++    try {
++      _accessToken = await storage.read(key: 'pbb_access_token');
++      if (_accessToken == null) { state = LoginState.guest; notifyListeners(); return; }
++      user = await api.me(_accessToken!);
++      state = LoginState.signedIn;
++    } on AuthApiException catch (e) {
++      if (e.statusCode == 401 || e.statusCode == 403) {
++        await _clearLocal();
++        state = LoginState.guest;
++      } else {
++        // Do not delete SQLite progress or clear credentials on network failure.
++        state = LoginState.offline;
++      }
++    } catch (_) {
++      state = LoginState.offline;
++    }
++    notifyListeners();
++  }
++
++  Future<void> login(String email, String password) async {
++    final data = await api.login(email, password);
++    await storage.write(key: 'pbb_access_token', value: data.accessToken);
++    _accessToken = data.accessToken;
++    user = data.user;
++    state = LoginState.signedIn;
++    notifyListeners();
++  }
++
++  Future<void> refreshProfile() async {
++    final t = token;
++    if (t == null) throw const AuthApiException('请先登录');
++    try {
++      user = await api.me(t);
++      notifyListeners();
++    } on AuthApiException catch (e) {
++      if (e.statusCode == 401 || e.statusCode == 403) await expireSession();
++      rethrow;
++    }
++  }
++
++  Future<void> setProfile(UserProfile profile) async {
++    user = profile;
++    notifyListeners();
++  }
++
++  Future<void> expireSession() async {
++    await _clearLocal();
++    state = LoginState.guest;
++    notifyListeners();
++  }
++
++  /// Normal logout is server-confirmed (revokes all devices per contract).
++  /// localOnly is an explicit fallback; remote token might remain valid.
++  Future<void> logout({bool localOnly = false}) async {
++    if (!localOnly && _accessToken != null) await api.logout(_accessToken!);
++    await _clearLocal();
++    state = LoginState.guest;
++    notifyListeners();
++  }
++
++  Future<void> _clearLocal() async {
++    await storage.delete(key: 'pbb_access_token');
++    _accessToken = null;
++    user = null;
++  }
++}
+--- /dev/null
++++ b/frontend/lib/auth/planblindbox_auth.dart
+@@ -0,0 +1,4 @@
++export 'auth_api.dart';
++export 'auth_session.dart';
++export 'auth_pages.dart';
++export 'validators.dart';
+--- /dev/null
++++ b/frontend/lib/auth/validators.dart
+@@ -0,0 +1,36 @@
++import 'dart:convert';
++
++/// Passwords are never trimmed. All email entry points use this normalization.
++String normalizedEmail(String value) => value.trim().toLowerCase();
++String normalizedUsername(String value) => value.trim();
++
++String? usernameError(String? raw) {
++  final value = normalizedUsername(raw ?? '');
++  final len = value.runes.length;
++  if (len < 1 || len > 50) return '名称需为 1～50 个字符';
++  return null;
++}
++
++String? emailError(String? raw) {
++  final value = normalizedEmail(raw ?? '');
++  if (value.isEmpty || value.length > 100 || value.contains(' ') ||
++      !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value)) {
++    return '请输入有效邮箱（最多 100 字符）';
++  }
++  return null;
++}
++
++String? passwordError(String? value) {
++  final password = value ?? '';
++  if (password.runes.length < 8 || password.runes.length > 64) {
++    return '密码需为 8～64 个字符';
++  }
++  if (utf8.encode(password).length > 72) {
++    return '密码 UTF-8 编码不能超过 72 字节';
++  }
++  return null;
++}
++
++const genderOptions = <String, String>{
++  'MALE': '男', 'FEMALE': '女', 'UNDISCLOSED': '保密',
++};
+--- a/mod-server/pom.xml
++++ b/mod-server/pom.xml
+@@ -14,7 +14,11 @@
+     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-redis</artifactId></dependency>
+     <dependency><groupId>com.mysql</groupId><artifactId>mysql-connector-j</artifactId><scope>runtime</scope></dependency>
+     <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><scope>test</scope></dependency>
++    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency>
++    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-oauth2-resource-server</artifactId></dependency>
++    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-mail</artifactId></dependency>
+     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
++    <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
+   </dependencies>
+   <build><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build>
+ </project>
+--- a/mod-server/src/main/resources/application.yml
++++ b/mod-server/src/main/resources/application.yml
+@@ -7,8 +7,35 @@
+     url: ${MOD_DB_URL:jdbc:mysql://localhost:3306/plan_mod_market?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+     username: ${MOD_DB_USER:mod_app}
+     password: ${MOD_DB_PASSWORD:}
++  mail:
++    host: ${MAIL_HOST:}
++    port: ${MAIL_PORT:587}
++    username: ${MAIL_USERNAME:}
++    password: ${MAIL_PASSWORD:}
++    properties:
++      mail.smtp.auth: true
++      mail.smtp.starttls.enable: true
++      mail.smtp.starttls.required: true
++      mail.smtp.connectiontimeout: 5000
++      mail.smtp.timeout: 5000
++      mail.smtp.writetimeout: 5000
++  servlet:
++    multipart:
++      max-file-size: 2MB
++      max-request-size: 3MB
+   flyway:
+     enabled: true
+ mod:
+   admin-token: ${MOD_ADMIN_TOKEN:}
+   allowed-origins: ${MOD_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}
++auth:
++  jwt:
++    secret-base64: ${APP_JWT_SECRET_BASE64:}
++    issuer: planblindbox
++    audience: planblindbox-api
++    ttl-seconds: 7200
++  reset:
++    hmac-secret-base64: ${PASSWORD_RESET_HMAC_SECRET_BASE64:}
++    mail-from: ${MAIL_FROM:}
++  avatars:
++    directory: ${APP_AVATAR_DIR:./data/avatars}
+--- /dev/null
++++ b/mod-server/src/main/resources/db/migration/V3__community_auth.sql
+@@ -0,0 +1,42 @@
++CREATE TABLE community_user (
++  user_id BIGINT PRIMARY KEY AUTO_INCREMENT,
++  username VARCHAR(50) NOT NULL,
++  email VARCHAR(100) NOT NULL,
++  password_hash VARCHAR(255) NOT NULL,
++  gender VARCHAR(16) NOT NULL,
++  avatar VARCHAR(500) NULL,
++  birthday DATE NULL,
++  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
++  credential_version BIGINT NOT NULL DEFAULT 0,
++  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
++  last_login_at TIMESTAMP NULL,
++  CONSTRAINT uk_community_email UNIQUE (email)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++CREATE TABLE password_reset_challenge (
++  challenge_id CHAR(36) PRIMARY KEY,
++  user_id BIGINT NOT NULL,
++  code_mac CHAR(64) NOT NULL,
++  attempts INT NOT NULL DEFAULT 0,
++  expires_at TIMESTAMP NOT NULL,
++  consumed_at TIMESTAMP NULL,
++  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  KEY idx_reset_user (user_id),
++  FOREIGN KEY(user_id) REFERENCES community_user(user_id)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++CREATE TABLE password_reset_rate (
++  rate_key CHAR(64) NOT NULL,
++  bucket_start BIGINT NOT NULL,
++  hits INT NOT NULL DEFAULT 0,
++  PRIMARY KEY(rate_key,bucket_start)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++CREATE TABLE password_reset_budget (
++  user_id BIGINT PRIMARY KEY,
++  attempts INT NOT NULL DEFAULT 0,
++  window_start TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  FOREIGN KEY(user_id) REFERENCES community_user(user_id)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++CREATE TABLE password_reset_cooldown (
++  rate_key CHAR(64) PRIMARY KEY,
++  next_allowed_at TIMESTAMP NOT NULL
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+--- /dev/null
++++ b/mod-server/src/main/resources/db/migration/V4__user_progress.sql
+@@ -0,0 +1,8 @@
++CREATE TABLE user_progress_snapshot (
++  user_id BIGINT PRIMARY KEY,
++  revision BIGINT NOT NULL,
++  schema_version INT NOT NULL,
++  payload JSON NOT NULL,
++  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
++  FOREIGN KEY(user_id) REFERENCES community_user(user_id)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+--- a/mod-server/src/main/java/com/planblindbox/mod/api/CorsConfig.java
++++ b/mod-server/src/main/java/com/planblindbox/mod/api/CorsConfig.java
+@@ -13,7 +13,7 @@
+     @Override public void addCorsMappings(CorsRegistry registry) {
+         registry.addMapping("/api/v1/**")
+            .allowedOrigins(Arrays.stream(origins.split(",")).map(String::trim).toArray(String[]::new))
+-           .allowedMethods("GET","POST","PATCH","OPTIONS")
++           .allowedMethods("GET","POST","PUT","PATCH","DELETE","OPTIONS")
+            .allowedHeaders("Authorization","Content-Type");
+     }
+ }
+--- a/mod-server/src/main/java/com/planblindbox/mod/api/ApiErrors.java
++++ b/mod-server/src/main/java/com/planblindbox/mod/api/ApiErrors.java
+@@ -3,6 +3,7 @@
+ import com.planblindbox.mod.domain.ApiError;
+ import com.planblindbox.mod.domain.BadRequest;
+ import org.springframework.dao.DuplicateKeyException;
++import org.springframework.web.bind.MethodArgumentNotValidException;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.http.ResponseEntity;
+ import org.springframework.http.converter.HttpMessageNotReadableException;
+@@ -18,6 +19,8 @@
+     ResponseEntity<ApiError> conflict(DuplicateKeyException e) {return ResponseEntity.status(409).body(new ApiError("CONFLICT", "记录冲突，请重试"));}
+     @ExceptionHandler(HttpMessageNotReadableException.class)
+     ResponseEntity<ApiError> malformed(HttpMessageNotReadableException e) {return ResponseEntity.badRequest().body(new ApiError("INVALID_JSON", "请求 JSON 格式不正确"));}
++    @ExceptionHandler(MethodArgumentNotValidException.class)
++    ResponseEntity<ApiError> invalid(MethodArgumentNotValidException e) {return ResponseEntity.badRequest().body(new ApiError("VALIDATION_ERROR","提交字段不符合要求"));}
+     @ExceptionHandler(ResponseStatusException.class)
+     ResponseEntity<ApiError> status(ResponseStatusException e) {return ResponseEntity.status(e.getStatusCode()).body(new ApiError("REQUEST_FAILED", e.getReason()));}
+ }
+--- a/mod-server/src/test/resources/application.yml
++++ b/mod-server/src/test/resources/application.yml
+@@ -6,3 +6,11 @@
+     driver-class-name: org.h2.Driver
+ mod:
+   admin-token: test-only-token
++auth:
++  jwt:
++    issuer: planblindbox
++    audience: planblindbox-api
++    ttl-seconds: 7200
++    secret-base64: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
++  reset:
++    hmac-secret-base64: Hx4dHBsaGRgXFhUUExIREA8ODQwLCgkIBwYFBAMCAQA=
+--- a/mod-server/src/test/java/com/planblindbox/mod/ModCatalogIntegrationTest.java
++++ b/mod-server/src/test/java/com/planblindbox/mod/ModCatalogIntegrationTest.java
+@@ -1,4 +1,6 @@
+ package com.planblindbox.mod;
++
++import com.planblindbox.mod.auth.AuthService;
+ 
+ import org.junit.jupiter.api.Test;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -14,6 +16,12 @@
+ @AutoConfigureMockMvc
+ class ModCatalogIntegrationTest {
+     @Autowired MockMvc mvc;
++    @Autowired AuthService auth;
++    private String bearer() {
++        String email=java.util.UUID.randomUUID()+"@example.com";
++        auth.register("测试用户", email, "password12345", "UNDISCLOSED");
++        return "Bearer " + auth.login(email,"password12345").accessToken();
++    }
+     private final String raw="""
+         {"schemaVersion":1,"id":"com.example.reading","name":"阅读模板","version":"1.0.0",
+         "description":"每天阅读","permissions":["tasks.create"],"dependencies":[],
+@@ -28,16 +36,18 @@
+         mvc.perform(get("/api/v1/mods")).andExpect(status().isOk())
+                 .andExpect(jsonPath("$[0].id").value("com.example.reading"))
+                 .andExpect(jsonPath("$[0].downloads").value(0));
++        String token=bearer();
+         String request="{\"requestId\":\"c697e897-12f2-4c41-851e-b6e12dab89cb\"}";
+         mvc.perform(post("/api/v1/mods/com.example.reading/versions/1.0.0/download")
+-                .contentType(MediaType.APPLICATION_JSON).content(request))
++                .header("Authorization",token).contentType(MediaType.APPLICATION_JSON).content(request))
+                 .andExpect(status().isOk()).andExpect(jsonPath("$.counted").value(true));
+         mvc.perform(post("/api/v1/mods/com.example.reading/versions/1.0.0/download")
+-                .contentType(MediaType.APPLICATION_JSON).content(request))
++                .header("Authorization",token).contentType(MediaType.APPLICATION_JSON).content(request))
+                 .andExpect(status().isOk()).andExpect(jsonPath("$.counted").value(false));
+         mvc.perform(get("/api/v1/mods/com.example.reading"))
+                 .andExpect(status().isOk()).andExpect(jsonPath("$.downloads").value(1));
+-        mvc.perform(get("/api/v1/mods/com.example.reading/versions/1.0.0/manifest"))
++        mvc.perform(get("/api/v1/mods/com.example.reading/versions/1.0.0/manifest")
++                .header("Authorization",token))
+                 .andExpect(status().isOk()).andExpect(jsonPath("$.id").value("com.example.reading"));
+         mvc.perform(post("/api/v1/admin/mods/publish").header("Authorization","Bearer test-only-token")
+                 .contentType(MediaType.APPLICATION_JSON).content(raw))
+--- a/mod-server/src/test/java/com/planblindbox/mod/RankingIntegrationTest.java
++++ b/mod-server/src/test/java/com/planblindbox/mod/RankingIntegrationTest.java
+@@ -1,4 +1,6 @@
+ package com.planblindbox.mod;
++
++import com.planblindbox.mod.auth.AuthService;
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import org.junit.jupiter.api.Test;
+@@ -19,6 +21,12 @@
+ @AutoConfigureMockMvc
+ class RankingIntegrationTest {
+     @Autowired MockMvc mvc;
++    @Autowired AuthService auth;
++    private String bearer() {
++        String email=java.util.UUID.randomUUID()+"@example.com";
++        auth.register("测试用户", email, "password12345", "UNDISCLOSED");
++        return "Bearer " + auth.login(email,"password12345").accessToken();
++    }
+     @Autowired JdbcTemplate jdbc;
+     @Autowired ObjectMapper mapper;
+ 
+@@ -32,12 +40,13 @@
+         mvc.perform(post("/api/v1/admin/mods/publish")
+             .header("Authorization", "Bearer test-only-token")
+             .contentType(MediaType.APPLICATION_JSON).content(raw)).andExpect(status().isOk());
++        String token=bearer();
+         String requestId = UUID.randomUUID().toString();
+         String request = mapper.writeValueAsString(java.util.Map.of("requestId", requestId));
+         String uri = "/api/v1/mods/" + id + "/versions/1.0.0/download";
+-        mvc.perform(post(uri).contentType(MediaType.APPLICATION_JSON).content(request))
++        mvc.perform(post(uri).header("Authorization",token).contentType(MediaType.APPLICATION_JSON).content(request))
+             .andExpect(status().isOk()).andExpect(jsonPath("$.counted").value(true));
+-        mvc.perform(post(uri).contentType(MediaType.APPLICATION_JSON).content(request))
++        mvc.perform(post(uri).header("Authorization",token).contentType(MediaType.APPLICATION_JSON).content(request))
+             .andExpect(status().isOk()).andExpect(jsonPath("$.counted").value(false));
+         Integer downloads = jdbc.queryForObject(
+             "SELECT COUNT(*) FROM mod_download_events WHERE mod_id=?", Integer.class, id);
+--- a/mod-server/src/test/java/com/planblindbox/mod/ConcurrentDownloadIntegrationTest.java
++++ b/mod-server/src/test/java/com/planblindbox/mod/ConcurrentDownloadIntegrationTest.java
+@@ -1,4 +1,6 @@
+ package com.planblindbox.mod;
++
++import com.planblindbox.mod.auth.AuthService;
+ 
+ import com.fasterxml.jackson.databind.JsonNode;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+@@ -26,6 +28,12 @@
+ @AutoConfigureMockMvc
+ class ConcurrentDownloadIntegrationTest {
+     @Autowired MockMvc mvc;
++    @Autowired AuthService auth;
++    private String bearer() {
++        String email=java.util.UUID.randomUUID()+"@example.com";
++        auth.register("测试用户", email, "password12345", "UNDISCLOSED");
++        return "Bearer " + auth.login(email,"password12345").accessToken();
++    }
+     @Autowired JdbcTemplate jdbc;
+     @Autowired ObjectMapper mapper;
+ 
+@@ -48,6 +56,7 @@
+             .getContentAsString(StandardCharsets.UTF_8);
+         assertThat(mapper.readTree(response).path("name").asText()).isEqualTo("中文并发测试");
+ 
++        String token=bearer();
+         String requestId = UUID.randomUUID().toString();
+         String body = mapper.writeValueAsString(java.util.Map.of("requestId", requestId));
+         String uri = "/api/v1/mods/" + modId + "/versions/1.0.0/download";
+@@ -61,7 +70,7 @@
+                 futures.add(pool.submit(() -> {
+                     ready.countDown();
+                     if (!fire.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("未收到开始信号");
+-                    String json = mvc.perform(post(uri).contentType(MediaType.APPLICATION_JSON)
++                    String json = mvc.perform(post(uri).header("Authorization",token).contentType(MediaType.APPLICATION_JSON)
+                         .content(body)).andExpect(status().isOk()).andReturn()
+                         .getResponse().getContentAsString(StandardCharsets.UTF_8);
+                     return mapper.readTree(json);
+@@ -100,11 +109,12 @@
+                 .contentType(MediaType.APPLICATION_JSON).content(manifest.getBytes(StandardCharsets.UTF_8)))
+                 .andExpect(status().isOk());
+         }
++        String token=bearer();
+         String requestId = UUID.randomUUID().toString();
+         String body = mapper.writeValueAsString(java.util.Map.of("requestId", requestId));
+         mvc.perform(post("/api/v1/mods/"+firstId+"/versions/1.0.0/download")
+-            .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk());
++            .header("Authorization",token).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk());
+         mvc.perform(post("/api/v1/mods/"+secondId+"/versions/1.0.0/download")
+-            .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isConflict());
++            .header("Authorization",token).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isConflict());
+     }
+ }
+--- /dev/null
++++ b/mod-server/src/test/java/com/planblindbox/mod/AuthIntegrationTest.java
+@@ -0,0 +1,54 @@
++package com.planblindbox.mod;
++
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.databind.ObjectMapper;
++import java.util.UUID;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.http.MediaType;
++import org.springframework.test.web.servlet.MockMvc;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
++import static org.assertj.core.api.Assertions.assertThat;
++
++@SpringBootTest
++@AutoConfigureMockMvc
++class AuthIntegrationTest {
++    @Autowired MockMvc mvc;
++    @Autowired ObjectMapper json;
++    @Test void registerLoginProfileCloudAndTokenRevocation() throws Exception {
++        String email=" Test-"+UUID.randomUUID().toString().replace("-","")+"@Example.COM ";
++        String normalized=email.trim().toLowerCase(java.util.Locale.ROOT);
++        String body=json.writeValueAsString(java.util.Map.of("username","  Alice  ","email",email,
++                "password","testpass123456","gender","UNDISCLOSED"));
++        mvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON).content(body))
++                .andExpect(status().isCreated()).andExpect(jsonPath("$.username").value("Alice"))
++                .andExpect(jsonPath("$.email").value(normalized))
++                .andExpect(jsonPath("$.avatar").doesNotExist())
++                .andExpect(jsonPath("$.passwordHash").doesNotExist());
++        mvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON).content(body))
++                .andExpect(status().isConflict());
++        String login=json.writeValueAsString(java.util.Map.of("email",email,"password","testpass123456"));
++        String content=mvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON).content(login))
++                .andExpect(status().isOk()).andExpect(jsonPath("$.accessToken").isString()).andReturn()
++                .getResponse().getContentAsString();
++        String token="Bearer "+json.readTree(content).path("accessToken").asText();
++        mvc.perform(get("/api/v1/me")).andExpect(status().isUnauthorized());
++        mvc.perform(get("/api/v1/me").header("Authorization",token))
++                .andExpect(status().isOk()).andExpect(jsonPath("$.passwordHash").doesNotExist());
++        mvc.perform(put("/api/v1/me").header("Authorization",token)
++                .contentType(MediaType.APPLICATION_JSON)
++                .content("{\"username\":\"Bob\",\"gender\":\"MALE\",\"birthday\":\"2000-01-01\"}"))
++                .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("Bob"));
++        String payload="{\"expectedRevision\":0,\"schemaVersion\":1,\"payload\":{\"format\":\"planblindbox-local-backup\",\"formatVersion\":1,\"tables\":{}}}";
++        mvc.perform(put("/api/v1/me/progress").header("Authorization",token).contentType(MediaType.APPLICATION_JSON).content(payload))
++                .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(1));
++        mvc.perform(get("/api/v1/me/progress").header("Authorization",token))
++                .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(1));
++        mvc.perform(post("/api/v1/auth/logout").header("Authorization",token))
++                .andExpect(status().isNoContent());
++        mvc.perform(get("/api/v1/me").header("Authorization",token)).andExpect(status().isUnauthorized());
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/AuthController.java
+@@ -0,0 +1,25 @@
++package com.planblindbox.mod.auth;
++
++import jakarta.validation.Valid;
++import jakarta.validation.constraints.NotBlank;
++import org.springframework.http.HttpStatus;
++import org.springframework.http.ResponseEntity;
++import org.springframework.security.oauth2.jwt.Jwt;
++import org.springframework.security.core.annotation.AuthenticationPrincipal;
++import org.springframework.web.bind.annotation.*;
++
++@RestController @RequestMapping("/api/v1/auth")
++public class AuthController {
++    public record Register(String username,String email,String password,String gender) {}
++    public record Login(String email,String password) {}
++    private final AuthService auth;
++    public AuthController(AuthService auth){this.auth=auth;}
++    @PostMapping("/register") ResponseEntity<AuthService.Profile> register(@RequestBody Register r) {
++        return ResponseEntity.status(HttpStatus.CREATED).body(auth.register(r.username(),r.email(),r.password(),r.gender()));
++    }
++    @PostMapping("/login") AuthService.LoginResponse login(@RequestBody Login r) {
++        return auth.login(r.email(),r.password());
++    }
++    @PostMapping("/logout") @ResponseStatus(HttpStatus.NO_CONTENT)
++    void logout(@AuthenticationPrincipal Jwt jwt) {auth.logout(Long.parseLong(jwt.getSubject()));}
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/AuthService.java
+@@ -0,0 +1,60 @@
++package com.planblindbox.mod.auth;
++
++import com.planblindbox.mod.domain.BadRequest;
++import java.time.LocalDate;
++import org.springframework.dao.DuplicateKeyException;
++import org.springframework.http.HttpStatus;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++import org.springframework.web.server.ResponseStatusException;
++
++@Service
++public class AuthService {
++    public record Profile(long userId,String username,String email,String gender,String avatar,LocalDate birthday) {}
++    public record LoginResponse(String accessToken,long expiresIn,Profile user) {}
++    private final UserRepository users;
++    private final PasswordEncoder encoder;
++    private final TokenService tokens;
++    public AuthService(UserRepository users,PasswordEncoder encoder,TokenService tokens) {
++        this.users=users;this.encoder=encoder;this.tokens=tokens;
++    }
++    public static Profile profile(UserRepository.User u) {
++        return new Profile(u.id(),u.username(),u.email(),u.gender(),u.avatar(),u.birthday());
++    }
++    @Transactional
++    public Profile register(String name,String email,String password,String gender) {
++        name=PasswordRules.username(name);email=PasswordRules.email(email);PasswordRules.password(password);
++        gender=PasswordRules.gender(gender);
++        try {
++            long id=users.insert(name,email,encoder.encode(password),gender);
++            return profile(users.byId(id));
++        } catch (DuplicateKeyException e) {
++            throw new ResponseStatusException(HttpStatus.CONFLICT,"该邮箱已经注册");
++        }
++    }
++    public LoginResponse login(String email,String password) {
++        email=PasswordRules.email(email);
++        if (password==null || password.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>72)
++            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"邮箱或密码错误");
++        UserRepository.User user=users.byEmail(email);
++        if(user==null || !"ACTIVE".equals(user.status()) || !encoder.matches(password,user.passwordHash()))
++            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"邮箱或密码错误");
++        users.loginAt(user.id());
++        return new LoginResponse(tokens.issue(user),tokens.ttl(),profile(user));
++    }
++    public Profile me(long id) {return profile(require(id));}
++    public UserRepository.User require(long id) {
++        UserRepository.User user=users.byId(id);
++        if(user==null || !"ACTIVE".equals(user.status())) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"登录状态失效");
++        return user;
++    }
++    @Transactional public Profile update(long id,String name,String gender,LocalDate birthday) {
++        require(id);
++        name=PasswordRules.username(name);gender=PasswordRules.gender(gender);
++        if(birthday!=null && birthday.isAfter(LocalDate.now())) throw new BadRequest("生日不能晚于今天");
++        users.update(id,name,gender,birthday);
++        return me(id);
++    }
++    @Transactional public void logout(long id){require(id);users.revoke(id);}
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/JwtConfig.java
+@@ -0,0 +1,51 @@
++package com.planblindbox.mod.auth;
++
++import com.nimbusds.jose.jwk.source.ImmutableSecret;
++import java.util.Base64;
++import java.util.List;
++import javax.crypto.SecretKey;
++import javax.crypto.spec.SecretKeySpec;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++import org.springframework.security.oauth2.core.OAuth2Error;
++import org.springframework.security.oauth2.core.OAuth2TokenValidator;
++import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
++import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
++import org.springframework.security.oauth2.jwt.*;
++
++@Configuration
++public class JwtConfig {
++    @Bean SecretKey jwtSecret(@Value("${auth.jwt.secret-base64:}") String raw) {
++        try {
++            byte[] key=Base64.getDecoder().decode(raw);
++            if (key.length<32) throw new IllegalArgumentException("JWT secret must be at least 32 random bytes");
++            return new SecretKeySpec(key,"HmacSHA256");
++        } catch (IllegalArgumentException e) {
++            throw new IllegalStateException("请配置 APP_JWT_SECRET_BASE64（至少32随机字节，Base64）",e);
++        }
++    }
++    @Bean JwtEncoder jwtEncoder(SecretKey jwtSecret) {return new NimbusJwtEncoder(new ImmutableSecret<>(jwtSecret));}
++    @Bean JwtDecoder jwtDecoder(SecretKey jwtSecret,UserRepository users,
++            @Value("${auth.jwt.issuer}") String issuer,@Value("${auth.jwt.audience}") String audience) {
++        NimbusJwtDecoder decoder=NimbusJwtDecoder.withSecretKey(jwtSecret).macAlgorithm(MacAlgorithm.HS256).build();
++        OAuth2TokenValidator<Jwt> custom=jwt -> {
++            try {
++                if (!jwt.getAudience().contains(audience) || jwt.getIssuedAt()==null || jwt.getExpiresAt()==null)
++                    return invalid("invalid audience or timestamps");
++                long id=Long.parseLong(jwt.getSubject());
++                Object cv=jwt.getClaim("cv");
++                if (!(cv instanceof Number)) return invalid("invalid credentials");
++                UserRepository.User user=users.byId(id);
++                if (user==null || !"ACTIVE".equals(user.status()) || user.credentialVersion()!=((Number)cv).longValue())
++                    return invalid("credential revoked");
++                return OAuth2TokenValidatorResult.success();
++            } catch (RuntimeException e) {return invalid("invalid credentials");}
++        };
++        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefaultWithIssuer(issuer),custom));
++        return decoder;
++    }
++    private static OAuth2TokenValidatorResult invalid(String message) {
++        return OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token",message,null));
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/MailExecutorConfig.java
+@@ -0,0 +1,16 @@
++package com.planblindbox.mod.auth;
++
++import java.util.concurrent.Executor;
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++import org.springframework.scheduling.annotation.EnableAsync;
++import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
++
++@Configuration @EnableAsync
++public class MailExecutorConfig {
++    @Bean("mailExecutor") Executor mailExecutor() {
++        ThreadPoolTaskExecutor e=new ThreadPoolTaskExecutor();
++        e.setCorePoolSize(1);e.setMaxPoolSize(2);e.setQueueCapacity(30);
++        e.setThreadNamePrefix("password-email-");e.initialize();return e;
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/PasswordMailService.java
+@@ -0,0 +1,40 @@
++package com.planblindbox.mod.auth;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.beans.factory.ObjectProvider;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.mail.javamail.JavaMailSender;
++import org.springframework.mail.SimpleMailMessage;
++import org.springframework.scheduling.annotation.Async;
++import org.springframework.stereotype.Service;
++
++@Service
++public class PasswordMailService {
++    private static final Logger LOG=LoggerFactory.getLogger(PasswordMailService.class);
++    private final ObjectProvider<JavaMailSender> sender;
++    private final String from;
++    private final String host;
++    public PasswordMailService(ObjectProvider<JavaMailSender> sender,
++          @Value("${auth.reset.mail-from:}") String from,
++          @Value("${spring.mail.host:}") String host) {
++        this.sender=sender;this.from=from;this.host=host;
++    }
++    public boolean configured(){return !from.isBlank() && !host.isBlank() && sender.getIfAvailable()!=null;}
++    @Async("mailExecutor") public void sendCode(String email,String code){
++        try {
++            SimpleMailMessage m=new SimpleMailMessage();m.setFrom(from);m.setTo(email);
++            m.setSubject("PlanBlindBox 重置密码验证码");
++            m.setText("你的密码重置验证码是："+code+"\n10分钟内有效。若非本人操作，请忽略。不要把验证码告诉他人。");
++            sender.getObject().send(m);
++        } catch(Exception e) {LOG.error("密码重置邮件发送失败（已隐藏邮箱与验证码）",e.getClass().getSimpleName());}
++    }
++    @Async("mailExecutor") public void changed(String email){
++        try {
++            SimpleMailMessage m=new SimpleMailMessage();m.setFrom(from);m.setTo(email);
++            m.setSubject("PlanBlindBox 密码修改通知");
++            m.setText("你的 PlanBlindBox 登录密码已重置。若不是你本人操作，请尽快联系应用维护者。");
++            sender.getObject().send(m);
++        } catch(Exception e) {LOG.error("密码变更通知发送失败（已隐藏邮箱）");}
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/PasswordResetController.java
+@@ -0,0 +1,19 @@
++package com.planblindbox.mod.auth;
++
++import jakarta.servlet.http.HttpServletRequest;
++import org.springframework.http.HttpStatus;
++import org.springframework.web.bind.annotation.*;
++
++@RestController @RequestMapping("/api/v1/auth/password")
++public class PasswordResetController {
++    public record Forgot(String email) {}
++    public record Reset(String email,String challengeId,String code,String newPassword) {}
++    private final PasswordResetService service;
++    public PasswordResetController(PasswordResetService service){this.service=service;}
++    @PostMapping("/forgot") @ResponseStatus(HttpStatus.ACCEPTED)
++    PasswordResetService.ChallengeResult forgot(@RequestBody Forgot r,HttpServletRequest request){
++        return service.forgot(r.email(),request.getRemoteAddr());
++    }
++    @PostMapping("/reset") @ResponseStatus(HttpStatus.NO_CONTENT)
++    void reset(@RequestBody Reset r){service.reset(r.email(),r.challengeId(),r.code(),r.newPassword());}
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/PasswordResetService.java
+@@ -0,0 +1,128 @@
++package com.planblindbox.mod.auth;
++
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.security.SecureRandom;
++import java.time.Instant;
++import java.util.Base64;
++import java.util.HexFormat;
++import java.util.UUID;
++import javax.crypto.Mac;
++import javax.crypto.spec.SecretKeySpec;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.http.HttpStatus;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.support.TransactionTemplate;
++import org.springframework.web.server.ResponseStatusException;
++
++@Service
++public class PasswordResetService {
++    public record ChallengeResult(String challengeId,String message) {}
++    private enum ResetOutcome {SUCCESS,INVALID,LOCKED}
++    private record SendState(boolean shouldSend,String challengeId) {}
++    private final byte[] key;
++    private final JdbcTemplate jdbc;
++    private final UserRepository users;
++    private final TransactionTemplate tx;
++    private final PasswordEncoder encoder;
++    private final PasswordMailService mail;
++    private final SecureRandom random=new SecureRandom();
++    public PasswordResetService(JdbcTemplate jdbc,UserRepository users,
++            org.springframework.transaction.PlatformTransactionManager manager,
++            PasswordEncoder encoder,PasswordMailService mail,
++            @Value("${auth.reset.hmac-secret-base64:}") String raw) {
++        this.jdbc=jdbc;this.users=users;this.encoder=encoder;this.mail=mail;
++        this.tx=new TransactionTemplate(manager);
++        try {
++            key=Base64.getDecoder().decode(raw);
++            if(key.length<32)throw new IllegalArgumentException("too short");
++        } catch(IllegalArgumentException e) {throw new IllegalStateException("请配置 PASSWORD_RESET_HMAC_SECRET_BASE64（至少32随机字节，独立于JWT）",e);}
++    }
++    private String mac(String value){
++        try {
++            Mac h=Mac.getInstance("HmacSHA256");h.init(new SecretKeySpec(key,"HmacSHA256"));
++            return HexFormat.of().formatHex(h.doFinal(value.getBytes(StandardCharsets.UTF_8)));
++        } catch(Exception e){throw new IllegalStateException("HMAC不可用",e);}
++    }
++    private String rateKey(String label,String value){return mac(label+":"+value);}
++    private boolean hit(String label,String value,long seconds,int max){
++        long bucket=(Instant.now().getEpochSecond()/seconds)*seconds;
++        String k=rateKey(label,value);
++        jdbc.update("INSERT INTO password_reset_rate(rate_key,bucket_start,hits) VALUES(?,?,1) ON DUPLICATE KEY UPDATE hits=hits+1",k,bucket);
++        int current=jdbc.queryForObject("SELECT hits FROM password_reset_rate WHERE rate_key=? AND bucket_start=?",Integer.class,k,bucket);
++        return current<=max;
++    }
++    private boolean cooldown(String email){
++        String k=rateKey("emailCooldown",email);
++        jdbc.update("INSERT IGNORE INTO password_reset_cooldown(rate_key,next_allowed_at) VALUES(?,DATE_SUB(NOW(),INTERVAL 1 SECOND))",k);
++        return jdbc.update("UPDATE password_reset_cooldown SET next_allowed_at=DATE_ADD(NOW(),INTERVAL 60 SECOND) WHERE rate_key=? AND next_allowed_at<=NOW()",k)==1;
++    }
++    public ChallengeResult forgot(String rawEmail,String ip){
++        String email=PasswordRules.email(rawEmail);
++        if(!mail.configured())throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"邮件服务尚未配置，请联系维护者");
++        // Response shape is identical for unknown email and rate-limited requests.
++        String fake=UUID.randomUUID().toString();
++        final String[] codeHolder=new String[1];
++        SendState result=tx.execute(status->{
++            boolean okay=cooldown(email)
++                & hit("emailHour",email,3600,5)
++                & hit("ipHour",ip==null?"unknown":ip,3600,30);
++            if(!okay)return new SendState(false,fake);
++            UserRepository.User u=users.lockEmail(email);
++            if(u==null || !"ACTIVE".equals(u.status()))return new SendState(false,fake);
++            String challenge=UUID.randomUUID().toString();
++            String code=String.format(java.util.Locale.ROOT,"%06d",random.nextInt(1000000));
++            jdbc.update("UPDATE password_reset_challenge SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL",u.id());
++            jdbc.update("INSERT INTO password_reset_challenge(challenge_id,user_id,code_mac,expires_at) VALUES(?,?,?,DATE_ADD(NOW(), INTERVAL 10 MINUTE))",
++                challenge,u.id(),mac(challenge+":"+code));
++            codeHolder[0]=code;
++            return new SendState(true,challenge);
++        });
++        if(result!=null && result.shouldSend())mail.sendCode(email,codeHolder[0]);
++        return new ChallengeResult(result==null?fake:result.challengeId(),"如果邮箱已注册，验证码将发送至该邮箱");
++    }
++    public void reset(String rawEmail,String challenge,String code,String rawPassword){
++        String email=PasswordRules.email(rawEmail);
++        PasswordRules.password(rawPassword);
++        if(challenge==null || !challenge.matches("[0-9a-f-]{36}") || code==null || !code.matches("[0-9]{6}"))
++            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"验证码无效或已过期");
++        // Hash outside DB transaction so BCrypt does not hold row locks.
++        String hash=encoder.encode(rawPassword);
++        ResetOutcome outcome=tx.execute(status->{
++            UserRepository.User u=users.lockEmail(email);
++            if(u==null)return ResetOutcome.INVALID;
++            jdbc.update("INSERT IGNORE INTO password_reset_budget(user_id,attempts,window_start) VALUES(?,0,CURRENT_TIMESTAMP)",u.id());
++            var budget=jdbc.queryForMap("SELECT attempts,window_start FROM password_reset_budget WHERE user_id=? FOR UPDATE",u.id());
++            int attempts=((Number)budget.get("attempts")).intValue();
++            java.sql.Timestamp since=(java.sql.Timestamp)budget.get("window_start");
++            if(since.toInstant().isBefore(Instant.now().minusSeconds(3600))){
++                jdbc.update("UPDATE password_reset_budget SET attempts=0,window_start=CURRENT_TIMESTAMP WHERE user_id=?",u.id());
++                attempts=0;
++            }
++            if(attempts>=5)return ResetOutcome.LOCKED;
++            var rows=jdbc.query("SELECT code_mac,attempts,expires_at,consumed_at FROM password_reset_challenge WHERE user_id=? AND challenge_id=? FOR UPDATE",
++                (rs,n)->new Object[]{rs.getString(1),rs.getInt(2),rs.getTimestamp(3),rs.getTimestamp(4)},u.id(),challenge);
++            if(rows.isEmpty()){
++                jdbc.update("UPDATE password_reset_budget SET attempts=attempts+1 WHERE user_id=?",u.id());
++                return ResetOutcome.INVALID;
++            }
++            Object[] row=rows.get(0);
++            boolean valid=row[3]==null && ((Integer)row[1])<5 && ((java.sql.Timestamp)row[2]).toInstant().isAfter(Instant.now())
++                && MessageDigest.isEqual(((String)row[0]).getBytes(StandardCharsets.US_ASCII),mac(challenge+":"+code).getBytes(StandardCharsets.US_ASCII));
++            if(!valid){
++                jdbc.update("UPDATE password_reset_challenge SET attempts=attempts+1 WHERE challenge_id=?",challenge);
++                jdbc.update("UPDATE password_reset_budget SET attempts=attempts+1 WHERE user_id=?",u.id());
++                return ResetOutcome.INVALID;
++            }
++            users.passwordAndRevoke(u.id(),hash);
++            jdbc.update("UPDATE password_reset_challenge SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL",u.id());
++            jdbc.update("UPDATE password_reset_budget SET attempts=0,window_start=CURRENT_TIMESTAMP WHERE user_id=?",u.id());
++            return ResetOutcome.SUCCESS;
++        });
++        if(outcome==ResetOutcome.SUCCESS){mail.changed(email);return;}
++        if(outcome==ResetOutcome.LOCKED)throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,"尝试次数过多，请一小时后再试");
++        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"验证码无效或已过期");
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/PasswordRules.java
+@@ -0,0 +1,34 @@
++package com.planblindbox.mod.auth;
++
++import com.planblindbox.mod.domain.BadRequest;
++import java.nio.charset.StandardCharsets;
++import java.util.Locale;
++import java.util.regex.Pattern;
++
++public final class PasswordRules {
++    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
++    private PasswordRules() {}
++    public static String email(String email) {
++        if (email == null) throw new BadRequest("请输入邮箱");
++        String value = email.strip().toLowerCase(Locale.ROOT);
++        if (value.length() > 100 || !EMAIL.matcher(value).matches()) throw new BadRequest("邮箱格式不正确（最多100字符）");
++        return value;
++    }
++    public static String username(String value) {
++        if (value == null) throw new BadRequest("请输入名称");
++        String name = value.strip();
++        if (name.isEmpty() || name.codePointCount(0, name.length()) > 50) throw new BadRequest("名称须为1～50字");
++        return name;
++    }
++    public static void password(String value) {
++        if (value == null || value.codePointCount(0, value.length()) < 8 || value.codePointCount(0, value.length()) > 64
++                || value.getBytes(StandardCharsets.UTF_8).length > 72) {
++            throw new BadRequest("密码须为8～64字符，UTF-8编码不超过72字节");
++        }
++    }
++    public static String gender(String value) {
++        if (!"MALE".equals(value) && !"FEMALE".equals(value) && !"UNDISCLOSED".equals(value))
++            throw new BadRequest("请选择性别");
++        return value;
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/SecurityConfig.java
+@@ -0,0 +1,53 @@
++package com.planblindbox.mod.auth;
++
++import jakarta.servlet.DispatcherType;
++import java.util.Map;
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++import org.springframework.core.annotation.Order;
++import org.springframework.http.HttpMethod;
++import org.springframework.http.MediaType;
++import org.springframework.security.config.annotation.web.builders.HttpSecurity;
++import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
++import org.springframework.security.config.http.SessionCreationPolicy;
++import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.security.web.SecurityFilterChain;
++import org.springframework.security.web.AuthenticationEntryPoint;
++import org.springframework.security.web.access.AccessDeniedHandler;
++import static org.springframework.security.config.Customizer.withDefaults;
++
++@Configuration @EnableWebSecurity
++public class SecurityConfig {
++    @Bean PasswordEncoder passwordEncoder(){return new BCryptPasswordEncoder(12);}
++    // Existing administrator authorization stays in ModAdminController.authorize().
++    @Bean @Order(1) SecurityFilterChain adminChain(HttpSecurity http) throws Exception {
++        return http.securityMatcher("/api/v1/admin/**").csrf(c->c.disable()).cors(withDefaults())
++                .sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
++                .authorizeHttpRequests(a->a.anyRequest().permitAll()).build();
++    }
++    @Bean @Order(2) SecurityFilterChain userChain(HttpSecurity http) throws Exception {
++        http.csrf(c->c.disable()).cors(withDefaults()).httpBasic(c->c.disable()).formLogin(c->c.disable())
++            .sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
++            .exceptionHandling(e->e.authenticationEntryPoint((req,res,ex)->{
++                res.setStatus(401);res.setContentType("application/json;charset=UTF-8");
++                res.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"请先登录\"}");
++            }).accessDeniedHandler((req,res,ex)->{
++                res.setStatus(403);res.setContentType("application/json;charset=UTF-8");
++                res.getWriter().write("{\"code\":\"FORBIDDEN\",\"message\":\"权限不足\"}");
++            }))
++            .authorizeHttpRequests(a->a
++               .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
++               .requestMatchers(HttpMethod.OPTIONS,"/**").permitAll()
++               .requestMatchers(HttpMethod.POST,"/api/v1/auth/register","/api/v1/auth/login",
++                       "/api/v1/auth/password/forgot","/api/v1/auth/password/reset").permitAll()
++               .requestMatchers(HttpMethod.GET,"/api/v1/avatars/**").permitAll()
++               .requestMatchers(HttpMethod.POST,"/api/v1/mods/*/versions/*/download").authenticated()
++               .requestMatchers(HttpMethod.GET,"/api/v1/mods/*/versions/*/manifest").authenticated()
++               .requestMatchers(HttpMethod.GET,"/api/v1/mods","/api/v1/mods/ranking","/api/v1/mods/*").permitAll()
++               .requestMatchers("/api/v1/me","/api/v1/me/**","/api/v1/auth/logout").authenticated()
++               .anyRequest().denyAll())
++            .oauth2ResourceServer(o->o.jwt(withDefaults()));
++        return http.build();
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/TokenService.java
+@@ -0,0 +1,29 @@
++package com.planblindbox.mod.auth;
++
++import java.time.Instant;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
++import org.springframework.security.oauth2.jwt.JwtClaimsSet;
++import org.springframework.security.oauth2.jwt.JwtEncoder;
++import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
++import org.springframework.security.oauth2.jwt.JwsHeader;
++import org.springframework.stereotype.Service;
++
++@Service
++public class TokenService {
++    private final JwtEncoder encoder;
++    private final String issuer,audience;
++    private final long ttl;
++    public TokenService(JwtEncoder encoder,@Value("${auth.jwt.issuer}") String issuer,
++          @Value("${auth.jwt.audience}") String audience,@Value("${auth.jwt.ttl-seconds:7200}") long ttl) {
++        this.encoder=encoder;this.issuer=issuer;this.audience=audience;this.ttl=ttl;
++    }
++    public String issue(UserRepository.User user) {
++        Instant now=Instant.now();
++        JwtClaimsSet claims=JwtClaimsSet.builder().issuer(issuer).audience(java.util.List.of(audience))
++            .subject(Long.toString(user.id())).issuedAt(now).expiresAt(now.plusSeconds(ttl))
++            .claim("cv",user.credentialVersion()).build();
++        return encoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(),claims)).getTokenValue();
++    }
++    public long ttl() {return ttl;}
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/auth/UserRepository.java
+@@ -0,0 +1,53 @@
++package com.planblindbox.mod.auth;
++
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.jdbc.support.GeneratedKeyHolder;
++import org.springframework.jdbc.support.KeyHolder;
++import org.springframework.stereotype.Repository;
++import java.sql.PreparedStatement;
++import java.sql.Statement;
++import java.time.LocalDate;
++import java.time.LocalDateTime;
++import java.util.List;
++
++@Repository
++public class UserRepository {
++    public record User(long id, String username, String email, String passwordHash,
++            String gender, String avatar, LocalDate birthday, String status, long credentialVersion) {}
++    private final JdbcTemplate jdbc;
++    public UserRepository(JdbcTemplate jdbc) { this.jdbc=jdbc; }
++    private final org.springframework.jdbc.core.RowMapper<User> mapper = (rs,n) -> new User(
++        rs.getLong("user_id"),rs.getString("username"),rs.getString("email"),rs.getString("password_hash"),
++        rs.getString("gender"),rs.getString("avatar"),rs.getObject("birthday",LocalDate.class),
++        rs.getString("status"),rs.getLong("credential_version"));
++    public User byEmail(String email) {
++        List<User> list=jdbc.query("SELECT * FROM community_user WHERE email=?",mapper,email);
++        return list.isEmpty()?null:list.get(0);
++    }
++    public User byId(long id) {
++        List<User> list=jdbc.query("SELECT * FROM community_user WHERE user_id=?",mapper,id);
++        return list.isEmpty()?null:list.get(0);
++    }
++    public User lockEmail(String email) {
++        List<User> list=jdbc.query("SELECT * FROM community_user WHERE email=? FOR UPDATE",mapper,email);
++        return list.isEmpty()?null:list.get(0);
++    }
++    public long insert(String name,String email,String hash,String gender) {
++        KeyHolder holder=new GeneratedKeyHolder();
++        jdbc.update(connection->{
++            PreparedStatement ps=connection.prepareStatement(
++                "INSERT INTO community_user(username,email,password_hash,gender,avatar) VALUES (?,?,?,?,NULL)",Statement.RETURN_GENERATED_KEYS);
++            ps.setString(1,name);ps.setString(2,email);ps.setString(3,hash);ps.setString(4,gender);return ps;
++        },holder);
++        return holder.getKey().longValue();
++    }
++    public void loginAt(long id) { jdbc.update("UPDATE community_user SET last_login_at=CURRENT_TIMESTAMP WHERE user_id=?",id); }
++    public void update(long id,String name,String gender,LocalDate birthday) {
++        jdbc.update("UPDATE community_user SET username=?,gender=?,birthday=? WHERE user_id=?",name,gender,birthday,id);
++    }
++    public void avatar(long id,String avatar) {jdbc.update("UPDATE community_user SET avatar=? WHERE user_id=?",avatar,id);}
++    public void revoke(long id) {jdbc.update("UPDATE community_user SET credential_version=credential_version+1 WHERE user_id=?",id);}
++    public void passwordAndRevoke(long id,String hash) {
++        jdbc.update("UPDATE community_user SET password_hash=?,credential_version=credential_version+1 WHERE user_id=?",hash,id);
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/profile/AvatarController.java
+@@ -0,0 +1,10 @@
++package com.planblindbox.mod.profile;
++import org.springframework.core.io.FileSystemResource;
++import org.springframework.http.ResponseEntity;
++import org.springframework.web.bind.annotation.*;
++@RestController @RequestMapping("/api/v1/avatars")
++public class AvatarController {
++    private final AvatarStorage storage;
++    public AvatarController(AvatarStorage storage){this.storage=storage;}
++    @GetMapping("/{filename:.+}") ResponseEntity<FileSystemResource> file(@PathVariable String filename){return storage.get(filename);}
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/profile/AvatarStorage.java
+@@ -0,0 +1,65 @@
++package com.planblindbox.mod.profile;
++
++import com.planblindbox.mod.auth.UserRepository;
++import com.planblindbox.mod.domain.BadRequest;
++import java.io.ByteArrayInputStream;
++import java.nio.file.*;
++import java.util.UUID;
++import javax.imageio.ImageIO;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.core.io.FileSystemResource;
++import org.springframework.http.MediaType;
++import org.springframework.http.ResponseEntity;
++import org.springframework.stereotype.Service;
++import org.springframework.web.bind.annotation.*;
++import org.springframework.web.multipart.MultipartFile;
++import org.springframework.web.server.ResponseStatusException;
++import org.springframework.http.HttpStatus;
++
++@Service
++public class AvatarStorage {
++    private final Path root;
++    private final UserRepository users;
++    public AvatarStorage(@Value("${auth.avatars.directory:./data/avatars}") String dir,UserRepository users){
++        this.root=Path.of(dir).toAbsolutePath().normalize();this.users=users;
++    }
++    public void save(long userId,MultipartFile uploaded) {
++        try {
++            byte[] bytes=uploaded.getBytes();
++            if(bytes.length==0 || bytes.length>2*1024*1024) throw new BadRequest("头像大小不能超过2MiB");
++            String ext;
++            if(bytes.length>4 && (bytes[0]&255)==0x89 && bytes[1]==0x50 && bytes[2]==0x4e && bytes[3]==0x47)
++                ext="png";
++            else if(bytes.length>4 && (bytes[0]&255)==0xff && (bytes[1]&255)==0xd8)
++                ext="jpg";
++            else throw new BadRequest("头像仅支持 PNG 或 JPEG");
++            var image=ImageIO.read(new ByteArrayInputStream(bytes));
++            if(image==null || image.getWidth()>4096 || image.getHeight()>4096 || image.getWidth()<1 || image.getHeight()<1)
++                throw new BadRequest("头像图片内容或尺寸无效");
++            Files.createDirectories(root);
++            String filename=UUID.randomUUID()+"."+ext;
++            Path dest=root.resolve(filename);
++            Files.write(dest,bytes,StandardOpenOption.CREATE_NEW);
++            try {
++                String old=users.byId(userId).avatar();
++                users.avatar(userId,"/api/v1/avatars/"+filename);
++                deleteOld(old);
++            } catch(Exception ex){Files.deleteIfExists(dest);throw ex;}
++        } catch(java.io.IOException e) {throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,"头像存储失败");}
++    }
++    public void clear(long userId) {
++        String old=users.byId(userId).avatar();
++        users.avatar(userId,null);deleteOld(old);
++    }
++    private void deleteOld(String old){
++        if(old==null || !old.matches("/api/v1/avatars/[0-9a-f-]{36}\\.(png|jpg)"))return;
++        try{Files.deleteIfExists(root.resolve(old.substring(old.lastIndexOf('/')+1)));}catch(java.io.IOException ignored){}
++    }
++    public ResponseEntity<FileSystemResource> get(String filename){
++        if(!filename.matches("[0-9a-f-]{36}\\.(png|jpg)"))throw new ResponseStatusException(HttpStatus.NOT_FOUND);
++        Path path=root.resolve(filename).normalize();
++        if(!path.startsWith(root)||!Files.isRegularFile(path))throw new ResponseStatusException(HttpStatus.NOT_FOUND);
++        return ResponseEntity.ok().contentType(filename.endsWith(".png")?MediaType.IMAGE_PNG:MediaType.IMAGE_JPEG)
++            .header("Cache-Control","public, max-age=3600").body(new FileSystemResource(path));
++    }
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/profile/ProfileController.java
+@@ -0,0 +1,27 @@
++package com.planblindbox.mod.profile;
++
++import com.planblindbox.mod.auth.AuthService;
++import java.time.LocalDate;
++import org.springframework.http.HttpStatus;
++import org.springframework.security.core.annotation.AuthenticationPrincipal;
++import org.springframework.security.oauth2.jwt.Jwt;
++import org.springframework.web.bind.annotation.*;
++import org.springframework.web.multipart.MultipartFile;
++
++@RestController @RequestMapping("/api/v1/me")
++public class ProfileController {
++    public record UpdateProfile(String username,String gender,LocalDate birthday) {}
++    private final AuthService auth;
++    private final AvatarStorage avatars;
++    public ProfileController(AuthService auth,AvatarStorage avatars){this.auth=auth;this.avatars=avatars;}
++    private long id(Jwt jwt){return Long.parseLong(jwt.getSubject());}
++    @GetMapping AuthService.Profile me(@AuthenticationPrincipal Jwt jwt){return auth.me(id(jwt));}
++    @PutMapping AuthService.Profile update(@AuthenticationPrincipal Jwt jwt,@RequestBody UpdateProfile request){
++        return auth.update(id(jwt),request.username(),request.gender(),request.birthday());
++    }
++    @PostMapping("/avatar") AuthService.Profile avatar(@AuthenticationPrincipal Jwt jwt,@RequestParam("file") MultipartFile file){
++        avatars.save(id(jwt),file);return auth.me(id(jwt));
++    }
++    @DeleteMapping("/avatar") @ResponseStatus(HttpStatus.NO_CONTENT)
++    void deleteAvatar(@AuthenticationPrincipal Jwt jwt){avatars.clear(id(jwt));}
++}
+--- /dev/null
++++ b/mod-server/src/main/java/com/planblindbox/mod/sync/ProgressController.java
+@@ -0,0 +1,51 @@
++package com.planblindbox.mod.sync;
++
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.databind.ObjectMapper;
++import com.planblindbox.mod.domain.BadRequest;
++import java.nio.charset.StandardCharsets;
++import java.util.Map;
++import java.util.List;
++import org.springframework.dao.DuplicateKeyException;
++import org.springframework.http.HttpStatus;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.security.core.annotation.AuthenticationPrincipal;
++import org.springframework.security.oauth2.jwt.Jwt;
++import org.springframework.web.bind.annotation.*;
++import org.springframework.web.server.ResponseStatusException;
++
++@RestController @RequestMapping("/api/v1/me/progress")
++public class ProgressController {
++    public record Save(long expectedRevision,int schemaVersion,JsonNode payload) {}
++    private final JdbcTemplate jdbc;private final ObjectMapper mapper;
++    public ProgressController(JdbcTemplate jdbc,ObjectMapper mapper){this.jdbc=jdbc;this.mapper=mapper;}
++    private long id(Jwt jwt){return Long.parseLong(jwt.getSubject());}
++    @GetMapping Map<String,Object> get(@AuthenticationPrincipal Jwt jwt) {
++        var rows=jdbc.query("SELECT revision,schema_version,payload,updated_at FROM user_progress_snapshot WHERE user_id=?",(rs,n)->Map.<String,Object>of(
++            "revision",rs.getLong(1),"schemaVersion",rs.getInt(2),"payload",parse(rs.getString(3)),
++            "updatedAt",rs.getTimestamp(4).toInstant().toString()),id(jwt));
++        if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"尚未上传云端进度");
++        return rows.get(0);
++    }
++    private JsonNode parse(String text) {try{return mapper.readTree(text);}catch(Exception e){throw new IllegalStateException("进度数据损坏");}}
++    @PutMapping Map<String,Long> save(@AuthenticationPrincipal Jwt jwt,@RequestBody Save r) {
++        if(r.schemaVersion()!=1 || r.expectedRevision()<0 || r.payload()==null || !r.payload().isObject()
++            || !"planblindbox-local-backup".equals(r.payload().path("format").asText())
++            || r.payload().path("formatVersion").asInt()!=1 || !r.payload().path("tables").isObject())
++            throw new BadRequest("快照格式或版本无效");
++        String json=r.payload().toString();
++        if(json.getBytes(StandardCharsets.UTF_8).length>5*1024*1024)
++            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"快照不能超过5MiB");
++        long uid=id(jwt);
++        if(r.expectedRevision()==0) {
++            try {
++                jdbc.update("INSERT INTO user_progress_snapshot(user_id,revision,schema_version,payload) VALUES(?,1,?,?)",uid,r.schemaVersion(),json);
++                return Map.of("revision",1L);
++            } catch(DuplicateKeyException ex) {throw new ResponseStatusException(HttpStatus.CONFLICT,"云端已存在快照，请先读取");}
++        }
++        int updated=jdbc.update("UPDATE user_progress_snapshot SET payload=?,schema_version=?,revision=revision+1 WHERE user_id=? AND revision=?",
++            json,r.schemaVersion(),uid,r.expectedRevision());
++        if(updated!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,"云端进度已变化，请重新读取后再确认");
++        return Map.of("revision",r.expectedRevision()+1);
++    }
++}
