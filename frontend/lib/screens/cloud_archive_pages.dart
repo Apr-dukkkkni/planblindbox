@@ -183,6 +183,22 @@ class _CloudArchiveOperationsPageState extends State<CloudArchiveOperationsPage>
 
   Future<void> _upload() async {
     if (_busy) return;
+    // Until local end-to-end encryption ships, do not upload highly private
+    // records without explicit acknowledgement of WebDAV plaintext storage.
+    final allow = await showDialog<bool>(context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认上传到坚果云'),
+        content: const Text('当前备份是未加密的 JSON，可能包含日记、情绪和生理期记录。'
+          '坚果云连接使用 HTTPS，但云端文件本身不是端到端加密。'
+          '如果不接受此风险，请取消，等待加密备份功能。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('了解风险并上传')),
+        ],
+      ));
+    if (allow != true || !mounted) return;
     setState(() => _busy = true);
     try {
       final result = await widget.controller.upload();

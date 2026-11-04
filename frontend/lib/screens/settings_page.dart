@@ -135,7 +135,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (_busy) return;
     final confirmed = await _confirm(
       title: '确认重置 PlanBlindBox？',
-      content: '这将清空当前设备上的任务、习惯、打卡、资产、奖励流水、盲盒记录和收藏进度，并恢复默认分类及偏好设置。内置盲盒和收藏品目录会保留。此操作不能撤销。',
+      content: '将清空当前账号分区中的本地数据。不会清除服务器水滴。建议先备份。',
       confirmText: '清空并重置',
       destructive: true,
     );
@@ -314,7 +314,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                _sectionTitle('签到统计', '月度奖励连续天数与历史坚持情况分开计算'),
+                _sectionTitle('本机签到记录', '仅供历史参考；水滴余额以服务器为准'),
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),

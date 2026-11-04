@@ -78,8 +78,9 @@ class JianguoyunWebDav {
   final http.Client _client;
   final bool _ownsClient;
   static final Uri _root = Uri.parse('https://dav.jianguoyun.com/dav/');
-  static final Uri _folder = _root.resolve('PlanBlindBox/');
-  static final Uri _latest = _folder.resolve('latest.json');
+  // Keep separate PlanBlindBox accounts in independent DAV directories.
+  // Never trust a remote filename or URL as a path component.
+  Uri _accountFolder(int owner) => _root.resolve('PlanBlindBox/account_$owner/');
 
   Future<http.Response> _send(
     String method,
@@ -115,8 +116,10 @@ class JianguoyunWebDav {
     _require(response, [207], 'WebDAV 连接测试');
   }
 
-  Future<void> _ensureFolder(WebDavCredentials credentials) async {
-    final response = await _send('MKCOL', _folder, credentials);
+  Future<void> _ensureFolder(WebDavCredentials credentials, Uri folder) async {
+    final base = await _send('MKCOL', _root.resolve('PlanBlindBox/'), credentials);
+    _require(base, [201, 405], '创建 PlanBlindBox 目录');
+    final response = await _send('MKCOL', folder, credentials);
     // 405 means the collection already exists in common WebDAV implementations.
     _require(response, [201, 405], '创建存档目录');
   }
@@ -126,6 +129,14 @@ class JianguoyunWebDav {
     String backupJson,
   ) async {
     final payload = jsonDecode(backupJson); // Validate before any network write.
+    if (payload is! Map<String, dynamic> ||
+        payload['format'] != 'planblindbox-local-backup' ||
+        payload['backupUserId'] is! int) {
+      throw const FormatException('备份必须声明当前账号，禁止上传不明来源的数据');
+    }
+    final owner = payload['backupUserId'] as int;
+    final folder = _accountFolder(owner);
+    final latest = folder.resolve('latest.json');
     final created = DateTime.now().toUtc();
     final random = Random.secure().nextInt(0x7fffffff);
     final timestamp = created.toIso8601String()
@@ -139,8 +150,8 @@ class JianguoyunWebDav {
     });
     final digest = sha256.convert(utf8.encode(envelope)).toString();
 
-    await _ensureFolder(credentials);
-    final target = _folder.resolve(fileName);
+    await _ensureFolder(credentials, folder);
+    final target = folder.resolve(fileName);
     final uploaded = await _send('PUT', target, credentials, body: envelope);
     _require(uploaded, [200, 201, 204], '上传存档');
 
@@ -157,16 +168,23 @@ class JianguoyunWebDav {
       'createdAt': created.toIso8601String(),
       'sha256': digest,
     });
-    final updated = await _send('PUT', _latest, credentials, body: pointer);
+    final updated = await _send('PUT', latest, credentials, body: pointer);
     _require(updated, [200, 201, 204], '更新最新存档索引');
 
     return CloudArchiveInfo(createdAt: created, fileName: fileName);
   }
 
   Future<DownloadedArchive> downloadLatest(
-    WebDavCredentials credentials,
+    WebDavCredentials credentials, int owner,
   ) async {
-    final pointerResponse = await _send('GET', _latest, credentials);
+    Uri folder = _accountFolder(owner);
+    var pointerResponse = await _send('GET', folder.resolve('latest.json'), credentials);
+    if (pointerResponse.statusCode == 404) {
+      // Read old single-folder archives for migration, but only AFTER verifying
+      // the backupUserId inside the downloaded envelope matches this account.
+      folder = _root.resolve('PlanBlindBox/');
+      pointerResponse = await _send('GET', folder.resolve('latest.json'), credentials);
+    }
     if (pointerResponse.statusCode == 404) {
       throw StateError('云端暂无存档');
     }
@@ -184,7 +202,7 @@ class JianguoyunWebDav {
       throw const FormatException('云端索引存在非法文件名或摘要');
     }
 
-    final response = await _send('GET', _folder.resolve(fileName), credentials);
+    final response = await _send('GET', folder.resolve(fileName), credentials);
     _require(response, [200], '下载存档');
     if (sha256.convert(response.bodyBytes).toString() != digest) {
       throw const FormatException('存档 SHA-256 校验失败，未执行恢复');
@@ -196,6 +214,11 @@ class JianguoyunWebDav {
         envelope['createdAt'] is! String ||
         !envelope.containsKey('payload')) {
       throw const FormatException('存档格式或版本不支持，未执行恢复');
+    }
+    final payload = envelope['payload'];
+    if (payload is! Map<String, dynamic> || payload['backupUserId'] != owner ||
+        payload['format'] != 'planblindbox-local-backup') {
+      throw const FormatException('云端存档属于其他账号，已拒绝恢复');
     }
     final createdAt = DateTime.tryParse(envelope['createdAt'] as String);
     if (createdAt == null) {
@@ -215,12 +238,14 @@ class JianguoyunWebDav {
 class CloudArchiveController {
   CloudArchiveController({
     required this.bridge,
+    required this.currentOwner,
     ArchiveCredentialStore? store,
     JianguoyunWebDav? webDav,
   })  : store = store ?? ArchiveCredentialStore(),
         webDav = webDav ?? JianguoyunWebDav();
 
   final ArchiveDataBridge bridge;
+  final int Function() currentOwner;
   final ArchiveCredentialStore store;
   final JianguoyunWebDav webDav;
 
@@ -228,13 +253,17 @@ class CloudArchiveController {
     final credentials = await store.read();
     if (credentials == null) throw StateError('请先配置坚果云');
     final data = await bridge.exportJson();
+    final decoded = jsonDecode(data);
+    if (decoded is! Map || decoded['backupUserId'] != currentOwner()) {
+      throw StateError('账号在备份过程中已切换，上传已取消');
+    }
     return webDav.upload(credentials, data);
   }
 
   Future<DownloadedArchive> downloadLatest() async {
     final credentials = await store.read();
     if (credentials == null) throw StateError('请先配置坚果云');
-    return webDav.downloadLatest(credentials);
+    return webDav.downloadLatest(credentials, currentOwner());
   }
 
   // Restore MUST be atomic in the existing local backup implementation.

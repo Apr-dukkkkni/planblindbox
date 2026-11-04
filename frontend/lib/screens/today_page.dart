@@ -11,6 +11,7 @@ import 'habit_management_page.dart';
 import '../services/cloud_archive_service.dart';
 import 'cloud_archive_pages.dart';
 import '../data/wellbeing_repository.dart';
+import '../auth/auth_session.dart';
 import 'wellbeing_pages.dart';
 
 
@@ -22,6 +23,7 @@ class TodayPage extends StatefulWidget {
     this.archiveController,
     this.isFemale = false,
     this.wellbeingUserId = -1,
+    this.auth,
   });
 
   final TodayApi api;
@@ -29,6 +31,7 @@ class TodayPage extends StatefulWidget {
   final CloudArchiveController? archiveController;
   final bool isFemale;
   final int wellbeingUserId;
+  final AuthSession? auth;
 
   @override
   State<TodayPage> createState() => _TodayPageState();
@@ -278,7 +281,11 @@ class _TodayPageState extends State<TodayPage> {
       context: context,
       builder: (_) => WellbeingCalendarDialog(
         repository: WellbeingRepository(
-          userId: widget.wellbeingUserId, signInUserId: widget.api.userId),
+          userId: widget.wellbeingUserId,
+          signInUserId: widget.api.userId,
+          fetchServerCheckIns: widget.auth?.token == null ? null :
+              (year, month) => widget.auth!.api.getWaterMonth(
+                widget.auth!.token!, year, month)),
         isFemale: widget.isFemale,
       ),
     );

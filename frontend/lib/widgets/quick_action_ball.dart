@@ -52,7 +52,7 @@ class _QuickActionBallState extends State<QuickActionBall> {
       Positioned.fill(child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () => setState(() => _expanded = false),
-        child: Container(color: Colors.black.withOpacity(0.12)),
+        child: Container(color: Colors.black.withValues(alpha: 0.12)),
       )),
     Positioned(
       left: 16,

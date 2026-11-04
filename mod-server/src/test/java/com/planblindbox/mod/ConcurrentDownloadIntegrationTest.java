@@ -3,6 +3,7 @@ package com.planblindbox.mod;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,11 +20,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest(properties = "mod.ranking.enabled=false")
 @AutoConfigureMockMvc
+@WithMockUser(username = "mod-integration-test")
 class ConcurrentDownloadIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
@@ -61,7 +64,11 @@ class ConcurrentDownloadIntegrationTest {
                 futures.add(pool.submit(() -> {
                     ready.countDown();
                     if (!fire.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("未收到开始信号");
-                    String json = mvc.perform(post(uri).contentType(MediaType.APPLICATION_JSON)
+                    // @WithMockUser is bound to the JUnit thread, not this executor thread.
+                    // Attach test-only authentication to each concurrent request explicitly.
+                    String json = mvc.perform(post(uri)
+                        .with(user("mod-integration-test"))
+                        .contentType(MediaType.APPLICATION_JSON)
                         .content(body)).andExpect(status().isOk()).andReturn()
                         .getResponse().getContentAsString(StandardCharsets.UTF_8);
                     return mapper.readTree(json);

@@ -27,6 +27,26 @@ class PlanBlindBoxApp extends StatefulWidget {
 class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
   late final AuthSession _auth = AuthSession(AuthApi(baseUrl: ModMarketApi.baseUrl));
   bool _firstLoginScreen = true;
+  late TodayApi _api = _newApi(ApiConfig.userId);
+  int _activeLocalUserId = ApiConfig.userId;
+
+  TodayApi _newApi(int localId) => TodayApi(
+    baseUrl: ApiConfig.baseUrl,
+    userId: localId,
+  );
+
+  void _selectLocalAccount() {
+    // 保留旧版 user_id=1 作为游客/旧数据分区；不自动绑定到登录账号。
+    // 新账号使用负数分区，避免与历史本地 ID 冲突。
+    final int? accountId = _auth.localAccountUserId;
+    final int target = accountId == null
+        ? ApiConfig.userId
+        : -1000000 - accountId;
+    if (target == _activeLocalUserId) return;
+    _api.dispose();
+    _api = _newApi(target);
+    _activeLocalUserId = target;
+  }
 
   @override
   void initState() {
@@ -34,23 +54,17 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
     _auth.restore();
   }
 
-  late final TodayApi _api = TodayApi(
-    baseUrl: ApiConfig.baseUrl,
-    userId: ApiConfig.userId,
-  );
-
 
   late final CloudArchiveController _archive =
   CloudArchiveController(
+    currentOwner: () => _api.userId,
     bridge: ArchiveDataBridge(
       exportJson: () async {
         return await _api.repository.exportBackupJson();
       },
 
       restoreJson: (backupJson) async {
-        throw StateError(
-          '尚未接入本地备份恢复函数',
-        );
+        await _api.repository.restoreBackupJson(backupJson);
       },
     ),
   );
@@ -112,14 +126,18 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
                     if (_auth.state == LoginState.loading) {
                       return const Scaffold(body: Center(child: CircularProgressIndicator()));
                     }
-                    if (_firstLoginScreen && !_auth.isSignedIn) {
+                    _selectLocalAccount();
+                    if (_firstLoginScreen && !_auth.isSignedIn &&
+                        _auth.localAccountUserId == null) {
                       return LoginPage(
                         session: _auth,
                         onGuest: () => setState(() => _firstLoginScreen = false),
                         onLoggedIn: () => setState(() => _firstLoginScreen = false),
                       );
                     }
-                    return AppShell(api: _api, auth: _auth, archiveController: _archive);
+                    return AppShell(
+                      key: ValueKey('account-$_activeLocalUserId'),
+                      api: _api, auth: _auth, archiveController: _archive);
                   },
                 ),
               ),

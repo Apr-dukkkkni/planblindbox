@@ -232,5 +232,31 @@ class AuthApi {
     return (_requireObject(_parse(res))['revision'] as num).toInt();
   }
 
+  /// 后端权威水滴：客户端不上传 userId、余额或奖励金额。
+  Future<Map<String, dynamic>> getWaterStatus(String token) async {
+    final res = await _call(() => _client.get(
+      _uri('/api/v1/me/water'), headers: _headers(token)));
+    _ensure(res, {200});
+    return _requireObject(_parse(res));
+  }
+
+  Future<Map<String, dynamic>> claimWater(String token) async {
+    final res = await _call(() => _client.post(
+      _uri('/api/v1/me/water/check-in'), headers: _headers(token)));
+    _ensure(res, {200});
+    return _requireObject(_parse(res));
+  }
+
+  Future<List<Map<String, dynamic>>> getWaterMonth(
+      String token, int year, int month) async {
+    final res = await _call(() => _client.get(
+      _uri('/api/v1/me/water/check-ins?year=$year&month=$month'),
+      headers: _headers(token)));
+    _ensure(res, {200});
+    final body = _parse(res);
+    if (body is! List) throw const AuthApiException('签到列表格式不正确');
+    return body.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
   void dispose() => _client.close();
 }

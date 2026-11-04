@@ -10,6 +10,11 @@ class AuthSession extends ChangeNotifier {
   LoginState state = LoginState.loading;
   UserProfile? user;
   String? _accessToken;
+  int? _lastKnownUserId;
+
+  /// 断网时继续保留已登录用户的本地数据分区，不授予在线水滴权限。
+  int? get localAccountUserId => user?.userId ??
+      (state == LoginState.offline ? _lastKnownUserId : null);
   AuthSession(this.api, {FlutterSecureStorage? storage})
       : storage = storage ?? const FlutterSecureStorage();
 
@@ -20,8 +25,11 @@ class AuthSession extends ChangeNotifier {
     state = LoginState.loading; notifyListeners();
     try {
       _accessToken = await storage.read(key: 'pbb_access_token');
+      _lastKnownUserId = int.tryParse(await storage.read(key: 'pbb_last_user_id') ?? '');
       if (_accessToken == null) { state = LoginState.guest; notifyListeners(); return; }
       user = await api.me(_accessToken!);
+      _lastKnownUserId = user!.userId;
+      await storage.write(key: 'pbb_last_user_id', value: '${user!.userId}');
       state = LoginState.signedIn;
     } on AuthApiException catch (e) {
       if (e.statusCode == 401 || e.statusCode == 403) {
@@ -42,6 +50,8 @@ class AuthSession extends ChangeNotifier {
     await storage.write(key: 'pbb_access_token', value: data.accessToken);
     _accessToken = data.accessToken;
     user = data.user;
+    _lastKnownUserId = user!.userId;
+    await storage.write(key: 'pbb_last_user_id', value: '${user!.userId}');
     state = LoginState.signedIn;
     notifyListeners();
   }
@@ -80,6 +90,8 @@ class AuthSession extends ChangeNotifier {
 
   Future<void> _clearLocal() async {
     await storage.delete(key: 'pbb_access_token');
+    await storage.delete(key: 'pbb_last_user_id');
+    _lastKnownUserId = null;
     _accessToken = null;
     user = null;
   }

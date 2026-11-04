@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../auth/auth_api.dart';
 import '../auth/auth_session.dart';
 import '../data/today_api.dart';
+import '../services/core_sync_service.dart';
 
 /// Manual cloud snapshots; this does not replace the existing WebDAV archive UI.
 class UserCloudProgressPage extends StatefulWidget {
@@ -15,6 +16,7 @@ class UserCloudProgressPage extends StatefulWidget {
 class _UserCloudProgressPageState extends State<UserCloudProgressPage> {
   bool _busy = false;
   CloudSnapshot? _remote;
+  bool _entitled = false;
   String? _error;
   @override
   void initState() { super.initState(); _refresh(); }
@@ -23,6 +25,17 @@ class _UserCloudProgressPageState extends State<UserCloudProgressPage> {
     if(token == null) return;
     setState(() {_busy = true;_error=null;});
     try {
+      final client = CoreSyncClient(baseUrl: widget.auth.api.baseUrl);
+      Map<String, dynamic> status;
+      try { status = await client.entitlement(token); }
+      finally { client.dispose(); }
+      if (!mounted || widget.auth.token != token) return;
+      final active = status['active'] == true;
+      setState(() => _entitled = active);
+      if (!active) {
+        setState(() { _remote = null; _error = '当前没有有效云同步订阅。坚果云免费备份不受影响。'; });
+        return;
+      }
       final remote = await widget.auth.api.getProgress(token);
       if(mounted) setState(() => _remote = remote);
     } on AuthApiException catch(e) {
@@ -43,9 +56,9 @@ class _UserCloudProgressPageState extends State<UserCloudProgressPage> {
         ]))??false;
   void _message(String text){if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));}
   Future<void> _upload() async {
-    if(_busy || widget.auth.token==null) return;
+    if(_busy || !_entitled || widget.auth.token==null) return;
     final user = widget.auth.user!;
-    final owner = await widget.api.repository.getAppSetting('account_snapshot_owner_v1');
+    final owner = await widget.api.repository.getAppSetting('account_snapshot_owner_v1_${widget.api.userId}');
     if(!mounted) return;
     if(owner != null && owner.isNotEmpty && owner != user.userId.toString()) {
       _message('本机进度已关联其他账号。请先备份并恢复正确账号的数据，禁止直接跨账号上传。');
@@ -63,7 +76,7 @@ class _UserCloudProgressPageState extends State<UserCloudProgressPage> {
       final parsed=jsonDecode(raw);
       if(parsed is! Map<String,dynamic>) throw const FormatException('备份内容不是JSON对象');
       await widget.auth.api.putProgress(widget.auth.token!,_remote?.revision??0,parsed);
-      await widget.api.repository.setAppSetting('account_snapshot_owner_v1',user.userId.toString());
+      await widget.api.repository.setAppSetting('account_snapshot_owner_v1_${widget.api.userId}',user.userId.toString());
       if(mounted) _message('云端上传成功');
     } on AuthApiException catch(e) {
       if(e.statusCode==401) await widget.auth.expireSession();
@@ -85,7 +98,7 @@ class _UserCloudProgressPageState extends State<UserCloudProgressPage> {
       if(current==null)throw const AuthApiException('云端还没有快照');
       if(_remote!.revision != current.revision)throw const AuthApiException('云端快照已更新，请刷新后确认');
       await widget.api.repository.restoreBackupJson(jsonEncode(current.payload));
-      await widget.api.repository.setAppSetting('account_snapshot_owner_v1',widget.auth.user!.userId.toString());
+      await widget.api.repository.setAppSetting('account_snapshot_owner_v1_${widget.api.userId}',widget.auth.user!.userId.toString());
       _message('云端恢复成功，返回页面后刷新内容');
     } on AuthApiException catch(e) {
       if(e.statusCode==401) await widget.auth.expireSession();
@@ -102,14 +115,14 @@ class _UserCloudProgressPageState extends State<UserCloudProgressPage> {
       const SizedBox(height:16),
       Text(widget.auth.user?.email??'',textAlign:TextAlign.center),
       const SizedBox(height:16),
-      Text(_remote==null?'当前账号尚无云端快照':'云端快照修订版本：${_remote!.revision}'),
+      Text(!_entitled?'云同步订阅：未生效':(_remote==null?'当前账号尚无云端快照':'云端快照修订版本：${_remote!.revision}')),
       const SizedBox(height:10),
-      const Text('手动上传／恢复，不自动同步、不自动合并。原有坚果云存档功能不受影响。'),
+      const Text('此处为兼容旧数据的手动快照入口，不等于多设备自动同步。敏感明文记录禁止上传到服务器；坚果云独立备份不受影响。'),
       const SizedBox(height:12),
       if(_busy) const LinearProgressIndicator(),
       if(_error!=null) Text(_error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
       const SizedBox(height:20),
-      FilledButton.icon(onPressed:_busy?null:_upload,icon:const Icon(Icons.cloud_upload_outlined),label:const Text('上传本机进度')),
+      FilledButton.icon(onPressed:_busy || !_entitled?null:_upload,icon:const Icon(Icons.cloud_upload_outlined),label:const Text('上传本机进度')),
       const SizedBox(height:12),
       OutlinedButton.icon(onPressed:_busy || _remote==null?null:_restore,
         icon:const Icon(Icons.cloud_download_outlined),label:const Text('从云端恢复到本机')),

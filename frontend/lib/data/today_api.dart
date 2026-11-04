@@ -40,7 +40,9 @@ class TodayApi {
   Future<EarnedReward> checkInHabit(int habitId) async =>
       EarnedReward.fromResponse(await repository.checkInHabit(habitId));
 
-  Future<Map<String, dynamic>> dailySignIn() => repository.dailySignIn();
+  @Deprecated('水滴只能通过后端 AuthApi.claimWater 发放')
+  Future<Map<String, dynamic>> dailySignIn() async =>
+      throw StateError('本地签到发放水滴已禁用；请使用服务器水滴接口');
 
   Future<List<Map<String, dynamic>>> getTaskCategories({
     bool includeDisabled = false,

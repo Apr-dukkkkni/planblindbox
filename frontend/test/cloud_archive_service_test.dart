@@ -10,6 +10,7 @@ void main() {
     account: 'test@example.com',
     appPassword: 'unit-test-password',
   );
+  const ownerId = 1; // Mock account ID, not a global account ID in production.
 
   test('WebDAV upload -> verify -> latest download roundtrip', () async {
     final remoteFiles = <String, String>{};
@@ -27,7 +28,10 @@ void main() {
           if (!remoteFiles.containsKey(path)) {
             return http.Response('', 404);
           }
-          return http.Response(remoteFiles[path]!, 200);
+          return http.Response(
+            remoteFiles[path]!, 200,
+            headers: const {'content-type': 'application/json; charset=utf-8'},
+          );
         default:
           return http.Response('', 405);
       }
@@ -35,11 +39,15 @@ void main() {
     final dav = JianguoyunWebDav(client: client);
     await dav.testConnection(credentials);
 
-    const original = '{"tasks":[{"title":"读书"}],"coins":30}';
+    const original =
+        '{"format":"planblindbox-local-backup","backupUserId":1,"tasks":[{"title":"读书"}],"coins":30}';
     await dav.upload(credentials, original);
-    final downloaded = await dav.downloadLatest(credentials);
+    final downloaded = await dav.downloadLatest(credentials, ownerId);
     expect(jsonDecode(downloaded.backupJson), jsonDecode(original));
-    expect(remoteFiles.keys.any((p) => p.endsWith('/latest.json')), isTrue);
+    expect(
+      remoteFiles.keys.any((p) => p.endsWith('/account_1/latest.json')),
+      isTrue,
+    );
     dav.dispose();
   });
 
@@ -54,17 +62,25 @@ void main() {
       }
       if (request.method == 'GET') {
         final found = remoteFiles[path];
-        return found == null ? http.Response('', 404) : http.Response(found, 200);
+        return found == null
+            ? http.Response('', 404)
+            : http.Response(
+                found, 200,
+                headers: const {'content-type': 'application/json; charset=utf-8'},
+              );
       }
       return http.Response('', 405);
     });
     final dav = JianguoyunWebDav(client: client);
-    await dav.upload(credentials, '{"some":"data"}');
+    await dav.upload(
+      credentials,
+      '{"format":"planblindbox-local-backup","backupUserId":1,"some":"data"}',
+    );
     final fileKey = remoteFiles.keys.firstWhere((p) =>
         p.endsWith('.json') && !p.endsWith('/latest.json'));
     remoteFiles[fileKey] = '{"tampered":true}';
     await expectLater(
-      dav.downloadLatest(credentials),
+      dav.downloadLatest(credentials, ownerId),
       throwsA(isA<FormatException>()),
     );
     dav.dispose();

@@ -18,6 +18,13 @@ class LocalPlanRepository {
         _clock = clock ?? DateTime.now;
 
   final int userId;
+  // 兼容上一版情绪/日记数据分区：游客 -1；登录用户为服务器正数 ID。
+  int _ownerForTable(String table) {
+    if (table == 'wellbeing_entries' || table == 'wellbeing_moods') {
+      return userId == 1 ? -1 : -1000000 - userId;
+    }
+    return userId;
+  }
   final LocalDatabase _localDatabase;
   final DateTime Function() _clock;
   final Random _random = Random.secure();
@@ -221,7 +228,8 @@ class LocalPlanRepository {
     return {
       'coin': _int(rows.first['coin']),
       'exp': _int(rows.first['exp']),
-      'water': _int(rows.first['water']),
+      // 旧水滴字段只作为历史存档保留，不再作为可信余额。
+      'water': 0,
     };
   }
 
@@ -237,6 +245,9 @@ class LocalPlanRepository {
     required String source,
     required int sourceId,
   }) async {
+    if (water != 0) {
+      throw StateError('本地业务无权增加或扣除水滴');
+    }
     await _ensureAssets(db);
     final now = _dateTime(DateTime.now());
     await db.rawUpdate(
@@ -1009,80 +1020,33 @@ class LocalPlanRepository {
     };
   }
 
-  Future<Map<String, dynamic>> dailySignIn() async {
+  /// 从已验证的服务端签到响应维护日历标记，不改动任何本地水滴余额。
+  Future<void> recordServerSignIn({
+    required String businessDate,
+    required int streakDay,
+    required int totalWater,
+  }) async {
+    // 不从前端计算日期或水滴，服务端返回值仅用于当前用户的展示缓存。
+    final day = DateTime.tryParse(businessDate);
+    if (day == null || businessDate.length != 10 ||
+        _date(day) != businessDate || streakDay < 1 || totalWater < 0) {
+      throw FormatException('服务端签到数据格式错误');
+    }
     final db = await _db;
-    return db.transaction((txn) async {
-      final now = _clock();
-      final today = _businessDate(now);
-      final dateText = _date(today);
-      final existing = await txn.query('daily_sign_ins',
-          where: 'user_id = ? AND business_date = ?', whereArgs: [userId, dateText], limit: 1);
-      if (existing.isNotEmpty) {
-        final assets = await _assets(txn);
-        final metrics = await _getSignInMetrics(txn, today);
-        final monthlyStreak = _int(existing.first['streak_day'], 1);
-        return {
-          'granted': false,
-          'businessDate': dateText,
-          'streakDay': monthlyStreak,
-          'monthlyStreakDay': monthlyStreak,
-          'allTimeStreakDay': metrics['allTimeStreakDay'],
-          'longestStreakDay': metrics['longestStreakDay'],
-          'totalSignInDays': metrics['totalSignInDays'],
-          'baseWater': _int(existing.first['base_water'], 5),
-          'bonusWater': _int(existing.first['bonus_water']),
-          'totalWater': _int(existing.first['total_water']),
-          'waterBalance': assets['water'],
-        };
-      }
-
-      // 水滴奖励使用月度连续签到：每月 1 日从第 1 天重新计算。
-      var monthlyStreak = 1;
-      if (today.day != 1) {
-        final previous = await txn.query('daily_sign_ins',
-            where: 'user_id = ? AND business_date = ?',
-            whereArgs: [userId, _date(today.subtract(const Duration(days: 1)))],
-            limit: 1);
-        if (previous.isNotEmpty) {
-          monthlyStreak = _int(previous.first['streak_day'], 1) + 1;
-        }
-      }
-      final bonus = switch (monthlyStreak) { 7 => 10, 14 => 15, 21 => 30, _ => 0 };
-      const base = 5;
-      final total = base + bonus;
-      final signInId = await txn.insert('daily_sign_ins', {
-        'user_id': userId,
-        'business_date': dateText,
-        'streak_day': monthlyStreak,
-        'base_water': base,
-        'bonus_water': bonus,
-        'total_water': total,
-        'create_time': _dateTime(now),
-      });
-      await _addAssets(txn,
-          coin: 0,
-          exp: 0,
-          water: total,
-          action: 'DAILY_SIGN_IN',
-          source: 'DAILY_SIGN_IN',
-          sourceId: signInId);
-      final assets = await _assets(txn);
-      final metrics = await _getSignInMetrics(txn, today);
-      return {
-        'granted': true,
-        'businessDate': dateText,
-        'streakDay': monthlyStreak,
-        'monthlyStreakDay': monthlyStreak,
-        'allTimeStreakDay': metrics['allTimeStreakDay'],
-        'longestStreakDay': metrics['longestStreakDay'],
-        'totalSignInDays': metrics['totalSignInDays'],
-        'baseWater': base,
-        'bonusWater': bonus,
-        'totalWater': total,
-        'waterBalance': assets['water'],
-      };
-    });
+    await db.insert('daily_sign_ins', {
+      'user_id': userId,
+      'business_date': businessDate,
+      'streak_day': streakDay,
+      'base_water': 0,
+      'bonus_water': 0,
+      'total_water': totalWater,
+      'create_time': _dateTime(DateTime.now()),
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
+
+  @Deprecated('水滴签到已迁移到 mod-server')
+  Future<Map<String, dynamic>> dailySignIn() async =>
+      throw StateError('本地水滴签到已停用，请调用服务器水滴接口');
 
   // ---------------------------------------------------------------------------
   // 任务分类
@@ -1875,21 +1839,38 @@ class LocalPlanRepository {
     );
   }
 
+  /// 导出当前分区：账号切换后不得把其他账号的数据装入备份。
   Future<String> exportBackupJson() async {
     final db = await _db;
     await ensureReady();
     final tables = <String, List<Map<String, Object?>>>{};
     for (final table in _backupTables) {
-      final rows = await db.query(table);
+      final rows = switch (table) {
+        'task_records' || 'task_cycle_records' =>
+          await db.rawQuery('SELECT r.* FROM $table r JOIN tasks t ON r.task_id=t.task_id WHERE t.user_id=?', [userId]),
+        'habit_records' =>
+          await db.rawQuery('SELECT r.* FROM habit_records r JOIN habits h ON r.habit_id=h.habit_id WHERE h.user_id=?', [userId]),
+        'app_settings' => <Map<String, Object?>>[], // 全局设置不跟随账号导出
+        _ => await _exportTableForAccount(db, table),
+      };
       tables[table] = rows.map((row) => Map<String, Object?>.from(row)).toList();
     }
     return const JsonEncoder.withIndent('  ').convert({
       'format': 'planblindbox-local-backup',
       'formatVersion': 1,
       'databaseVersion': await db.getVersion(),
+      'backupUserId': userId,
       'exportedAt': DateTime.now().toIso8601String(),
       'tables': tables,
     });
+  }
+
+  Future<List<Map<String, Object?>>> _exportTableForAccount(Database db,String table) async {
+    final cols = await db.rawQuery('PRAGMA table_info($table)');
+    if (cols.any((col) => col['name']=='user_id')) {
+      return db.query(table, where:'user_id=?', whereArgs:[_ownerForTable(table)]);
+    }
+    return db.query(table); // 全局只读目录，如盲盒定义与收藏品目录
   }
 
   Future<void> restoreBackupJson(String content) async {
@@ -1905,6 +1886,15 @@ class LocalPlanRepository {
     }
 
     final db = await _db;
+    // 只接受当前账号签名的快照；恢复操作随后严格按 user_id 删除，
+    // 不会覆盖同设备其他账号。旧匿名快照仍只允许游客恢复。
+    final backupOwner = decoded['backupUserId'];
+    if (backupOwner != null && _int(backupOwner, -99999999) != userId) {
+      throw ApiException('备份属于其他账号，禁止跨账号覆盖恢复', statusCode: 403);
+    }
+    if (backupOwner == null && userId != 1) {
+      throw ApiException('旧版备份未声明账号，不能直接恢复到登录账号', statusCode: 403);
+    }
     final backupDatabaseVersion = _int(decoded['databaseVersion'], -1);
     final currentDatabaseVersion = await db.getVersion();
     final restoreLegacyV1 = backupDatabaseVersion == 1 && currentDatabaseVersion == 4;
@@ -1946,16 +1936,36 @@ class LocalPlanRepository {
         }
         rows.add(row);
       }
+      for (final row in rows) {
+        if (row.containsKey('user_id') && _int(row['user_id'], -99999999) != _ownerForTable(table)) {
+          throw ApiException('备份内存在其他账号的数据：$table', statusCode: 403);
+        }
+      }
       prepared[table] = rows;
     }
 
     await db.transaction((txn) async {
+      // 关系表没有 user_id，必须使用父记录的 user_id 过滤。
+      await txn.rawDelete('DELETE FROM task_records WHERE task_id IN (SELECT task_id FROM tasks WHERE user_id=?)',[userId]);
+      await txn.rawDelete('DELETE FROM task_cycle_records WHERE task_id IN (SELECT task_id FROM tasks WHERE user_id=?)',[userId]);
+      await txn.rawDelete('DELETE FROM habit_records WHERE habit_id IN (SELECT habit_id FROM habits WHERE user_id=?)',[userId]);
+      const globalCatalogs = <String>{
+        'content_packs','collectible_items','shop_boxes','shop_rewards',
+      };
       for (final table in _restoreDeleteOrder) {
-        await txn.delete(table);
+        if (table == 'app_settings' || globalCatalogs.contains(table) ||
+            const {'task_records','task_cycle_records','habit_records'}.contains(table)) continue;
+        await txn.delete(table, where: 'user_id=?', whereArgs: [_ownerForTable(table)]);
       }
       for (final table in _restoreInsertOrder) {
+        if (table == 'app_settings') continue;
         for (final row in prepared[table]!) {
-          await txn.insert(table, row);
+          if (globalCatalogs.contains(table)) {
+            // 静态目录可能已存在；不覆盖其他用户共享的定义。
+            await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.ignore);
+          } else {
+            await txn.insert(table, row);
+          }
         }
       }
       await txn.insert(
@@ -1972,37 +1982,35 @@ class LocalPlanRepository {
 
   /// 清空个人业务数据并重新初始化资产、默认分类。
   /// 静态盲盒目录和收藏品内容包保留，避免重置后商店无法使用。
+  /// 仅清除当前账号的本地数据，不影响同一设备上的其他账号。
   Future<void> resetLocalData({bool resetPreferences = true}) async {
     final db = await _db;
     await db.transaction((txn) async {
+      await txn.rawDelete('DELETE FROM task_records WHERE task_id IN (SELECT task_id FROM tasks WHERE user_id=?)',[userId]);
+      await txn.rawDelete('DELETE FROM task_cycle_records WHERE task_id IN (SELECT task_id FROM tasks WHERE user_id=?)',[userId]);
+      await txn.rawDelete('DELETE FROM habit_records WHERE habit_id IN (SELECT habit_id FROM habits WHERE user_id=?)',[userId]);
       const tables = <String>[
-        'wellbeing_entries',
-        'wellbeing_moods',
-        'custom_use_records',
-        'custom_purchase_records',
-        'custom_inventory',
-        'custom_products',
-        'custom_product_categories',
-        'shop_open_records',
-        'collectible_acquisition_records',
-        'user_collectibles',
-        'task_records',
-        'task_cycle_records',
-        'time_records',
-        'habit_records',
-        'habits',
-        'tasks',
-        'task_categories',
-        'asset_records',
-        'daily_sign_ins',
-        'user_assets',
+        'wellbeing_entries','wellbeing_moods',
+        'custom_use_records','custom_purchase_records','custom_inventory',
+        'custom_products','custom_product_categories',
+        'shop_open_records','collectible_acquisition_records','user_collectibles',
+        'time_records','habits','tasks','task_categories',
+        'asset_records','daily_sign_ins','user_assets',
       ];
       for (final table in tables) {
-        await txn.delete(table);
+        await txn.delete(table,where:'user_id=?',whereArgs:[_ownerForTable(table)]);
       }
-      if (resetPreferences) await txn.delete('app_settings');
+      // app_settings 属于设备级配置，不允许因为某个账号重置而清除。
     });
     await ensureReady();
+  }
+
+  Future<List<Map<String, Object?>>> _countTableForAccount(Database db,String table) async {
+    final cols=await db.rawQuery('PRAGMA table_info($table)');
+    return db.rawQuery(cols.any((c)=>c['name']=='user_id')
+      ? 'SELECT COUNT(*) AS total FROM $table WHERE user_id=?'
+      : 'SELECT COUNT(*) AS total FROM $table',
+      cols.any((c)=>c['name']=='user_id') ? [_ownerForTable(table)] : []);
   }
 
   Future<Map<String, dynamic>> getStorageStatus() async {
@@ -2011,7 +2019,15 @@ class LocalPlanRepository {
     final storage = await _localDatabase.getStorageInfo();
     final counts = <String, int>{};
     for (final entry in _statusTables.entries) {
-      final rows = await db.rawQuery('SELECT COUNT(*) AS total FROM ${entry.value}');
+      final table = entry.value;
+      final rows = switch (table) {
+        'task_records' || 'task_cycle_records' => await db.rawQuery(
+            'SELECT COUNT(*) AS total FROM $table r JOIN tasks t ON r.task_id=t.task_id WHERE t.user_id=?', [userId]),
+        'habit_records' => await db.rawQuery(
+            'SELECT COUNT(*) AS total FROM habit_records r JOIN habits h ON r.habit_id=h.habit_id WHERE h.user_id=?', [userId]),
+        'app_settings' => <Map<String, Object?>>[{'total': 0}],
+        _ => await _countTableForAccount(db, table),
+      };
       counts[entry.key] = _int(rows.first['total']);
     }
 

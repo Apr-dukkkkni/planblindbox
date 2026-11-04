@@ -31,6 +31,9 @@ class _MyPageState extends State<MyPage> {
   bool _loading = true;
   String? _error;
   int _requestSequence = 0;
+  int? _serverWater;
+  bool _waterLoading = false;
+  String? _waterMessage;
 
   static const Color _background = Color(0xFFF6F8F5);
   static const Color _forest = Color(0xFF315C48);
@@ -59,6 +62,7 @@ class _MyPageState extends State<MyPage> {
       _error = null;
     });
 
+    _loadServerWater(sequence);
     try {
       final result = await widget.api.getToday();
       if (!mounted || sequence != _requestSequence) return;
@@ -69,6 +73,30 @@ class _MyPageState extends State<MyPage> {
     } finally {
       if (mounted && sequence == _requestSequence) {
         setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _loadServerWater(int sequence) async {
+    final token = widget.auth.token;
+    setState(() { _serverWater = null; _waterMessage = null;
+      _waterLoading = token != null; });
+    if (token == null) {
+      if (mounted && sequence == _requestSequence) setState(() {
+        _waterMessage = '登录后领取水滴';
+      });
+      return;
+    }
+    try {
+      final data = await widget.auth.api.getWaterStatus(token);
+      if (!mounted || sequence != _requestSequence || widget.auth.token != token) return;
+      setState(() => _serverWater = (data['waterBalance'] as num).toInt());
+    } catch (_) {
+      if (!mounted || sequence != _requestSequence) return;
+      setState(() => _waterMessage = '暂无法读取服务器余额');
+    } finally {
+      if (mounted && sequence == _requestSequence) {
+        setState(() => _waterLoading = false);
       }
     }
   }
@@ -154,13 +182,16 @@ class _MyPageState extends State<MyPage> {
                 Expanded(
                   child: _assetCard(
                     title: '水滴',
-                    value: assets == null ? '—' : '${assets.water}',
+                    value: _waterLoading ? '…' : (_serverWater?.toString() ?? '—'),
                     icon: Icons.water_drop_outlined,
                     color: const Color(0xFF528DB7),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 7),
+            Text(_waterMessage ?? '水滴余额由服务器管理，本地不发放水滴',
+              style: const TextStyle(fontSize: 11, color: _muted)),
             if (_loading && _data != null) ...[
               const SizedBox(height: 10),
               const LinearProgressIndicator(minHeight: 2),

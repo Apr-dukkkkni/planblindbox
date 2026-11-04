@@ -46,12 +46,14 @@ class WellbeingEntry {
 }
 
 class WellbeingRepository {
-  WellbeingRepository({required this.userId, int? signInUserId, LocalDatabase? database})
+  WellbeingRepository({required this.userId, int? signInUserId,
+      this.fetchServerCheckIns, LocalDatabase? database})
       : signInUserId = signInUserId ?? userId,
         _database = database ?? LocalDatabase.instance;
 
   final int userId;
   final int signInUserId;
+  final Future<List<Map<String, dynamic>>> Function(int year, int month)? fetchServerCheckIns;
   final LocalDatabase _database;
 
   static String dateKey(DateTime date) =>
@@ -95,6 +97,27 @@ class WellbeingRepository {
     for (final row in rows) {
       final entry = WellbeingEntry.fromRow(row);
       result[entry.date] = entry;
+    }
+    // 免费模式仍可展示本机已记录的签到；联网时以服务端记录为准。
+    if (fetchServerCheckIns != null) {
+      try {
+        final remote = await fetchServerCheckIns!(month.year, month.month);
+        // 有认证响应后重建该月的签到标记，不信任旧设备上的签到缓存。
+        for (final key in result.keys.toList()) {
+          final old = result[key]!;
+          result[key] = WellbeingEntry(date: old.date, mood: old.mood,
+            emoji: old.emoji, period: old.period, diary: old.diary);
+        }
+        for (final checkin in remote) {
+          final key = checkin['businessDate']?.toString();
+          if (key == null) continue;
+          final old = result[key];
+          result[key] = WellbeingEntry(date: key, mood: old?.mood,
+            emoji: old?.emoji, period: old?.period ?? false,
+            diary: old?.diary ?? '', signedIn: true);
+        }
+      } catch (_) { // 离线显示最近一次本机缓存；不补发任何奖励。
+      }
     }
     return result;
   }

@@ -131,48 +131,30 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _signInDaily() async {
+    if (!widget.auth.isSignedIn) return; // 游客不产生可信水滴
+    final token = widget.auth.token;
+    if (token == null) return;
     try {
-      final result = await widget.api.dailySignIn();
-
-      if (!mounted) return;
-
-      // 偏好设置只控制提示，不影响自动签到与奖励发放。
-      if (!AppPreferences.instance.showDailySignInNotice) return;
-
-      if (result['granted'] == true) {
-        setState(() {
-          _todayVersion++;
-        });
-      }
-
-      // 今天已经领取过，不重复提示。
-      if (result['granted'] != true) return;
-
-      final totalWater = (result['totalWater'] as num?)?.toInt() ?? 0;
-
-      final streakDay = (result['monthlyStreakDay'] as num?)?.toInt() ??
-          (result['streakDay'] as num?)?.toInt() ??
-          1;
-      final allTimeStreak =
-          (result['allTimeStreakDay'] as num?)?.toInt() ?? streakDay;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '每日签到成功！本月连续第 $streakDay 天，历史连续 $allTimeStreak 天，获得 $totalWater 滴水滴。',
-          ),
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      final result = await widget.auth.api.claimWater(token);
+      if (!mounted || widget.auth.token != token) return;
+      final businessDate = result['businessDate']?.toString() ?? '';
+      final streak = (result['streakDay'] as num).toInt();
+      final rewarded = (result['totalWater'] as num).toInt();
+      // 仅保存一个只读的日历标记，不触碰 SQLite 本地资产水滴字段。
+      await widget.api.repository.recordServerSignIn(
+        businessDate: businessDate, streakDay: streak, totalWater: rewarded);
+      if (!mounted || widget.auth.token != token) return;
+      setState(() { _todayVersion++; _myVersion++; });
+      if (result['granted'] != true ||
+          !AppPreferences.instance.showDailySignInNotice) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('服务器签到成功！连续第 $streak 天，获得 $rewarded 滴水滴。'),
+        duration: const Duration(seconds: 4)));
     } catch (error) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('每日签到失败：$error'),
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      if (!mounted || widget.auth.token != token) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('服务器签到未成功：$error（本地任务可继续使用）'),
+        duration: const Duration(seconds: 4)));
     }
   }
 

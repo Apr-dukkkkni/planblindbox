@@ -18,9 +18,11 @@ import org.springframework.web.server.ResponseStatusException;
 public class ProgressController {
     public record Save(long expectedRevision,int schemaVersion,JsonNode payload) {}
     private final JdbcTemplate jdbc;private final ObjectMapper mapper;
-    public ProgressController(JdbcTemplate jdbc,ObjectMapper mapper){this.jdbc=jdbc;this.mapper=mapper;}
+    private final SyncEntitlementService entitlement;
+    public ProgressController(JdbcTemplate jdbc,ObjectMapper mapper,SyncEntitlementService entitlement){this.jdbc=jdbc;this.mapper=mapper;this.entitlement=entitlement;}
     private long id(Jwt jwt){return Long.parseLong(jwt.getSubject());}
     @GetMapping Map<String,Object> get(@AuthenticationPrincipal Jwt jwt) {
+        // Keep legacy backups readable after a subscription expires.
         var rows=jdbc.query("SELECT revision,schema_version,payload,updated_at FROM user_progress_snapshot WHERE user_id=?",(rs,n)->Map.<String,Object>of(
             "revision",rs.getLong(1),"schemaVersion",rs.getInt(2),"payload",parse(rs.getString(3)),
             "updatedAt",rs.getTimestamp(4).toInstant().toString()),id(jwt));
@@ -29,6 +31,15 @@ public class ProgressController {
     }
     private JsonNode parse(String text) {try{return mapper.readTree(text);}catch(Exception e){throw new IllegalStateException("进度数据损坏");}}
     @PutMapping Map<String,Long> save(@AuthenticationPrincipal Jwt jwt,@RequestBody Save r) {
+        entitlement.require(id(jwt));
+        // Legacy snapshots are retained for migration only, never for new sensitive data.
+        if (r.payload()!=null && r.payload().path("tables").isObject()) {
+            var tables = r.payload().path("tables");
+            if (tables.path("wellbeing_entries").size()>0 || tables.path("wellbeing_moods").size()>0) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "敏感记录必须走加密同步，不允许上传明文整库快照");
+            }
+        }
         if(r.schemaVersion()!=1 || r.expectedRevision()<0 || r.payload()==null || !r.payload().isObject()
             || !"planblindbox-local-backup".equals(r.payload().path("format").asText())
             || r.payload().path("formatVersion").asInt()!=1 || !r.payload().path("tables").isObject())
@@ -37,6 +48,9 @@ public class ProgressController {
         if(json.getBytes(StandardCharsets.UTF_8).length>5*1024*1024)
             throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"快照不能超过5MiB");
         long uid=id(jwt);
+        if (r.payload().path("backupUserId").asLong(Long.MIN_VALUE) != -1000000L-uid) {
+            throw new BadRequest("备份账号标识与当前登录用户不一致");
+        }
         if(r.expectedRevision()==0) {
             try {
                 jdbc.update("INSERT INTO user_progress_snapshot(user_id,revision,schema_version,payload) VALUES(?,1,?,?)",uid,r.schemaVersion(),json);
