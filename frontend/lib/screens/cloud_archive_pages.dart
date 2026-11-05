@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../services/cloud_archive_service.dart';
+import '../services/core_auto_sync.dart';
+import 'dart:convert';
 
 /// Entry used by Today's cloud icon.
 /// Returns true only if a cloud archive was restored successfully.
@@ -181,30 +183,49 @@ class _CloudArchiveOperationsPageState extends State<CloudArchiveOperationsPage>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  Future<String?> _askBackupPassword({required bool confirm}) async {
+    final first = TextEditingController();
+    final again = TextEditingController();
+    try {
+      return await showDialog<String>(context: context, builder: (ctx) =>
+        StatefulBuilder(builder: (ctx, redraw) => AlertDialog(
+          title: Text(confirm ? '设置本次加密备份密码' : '输入加密备份密码'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('备份密码不会上传或保存。丢失密码将无法恢复该备份。'
+              '建议使用至少10位、独立于账号密码的口令。'),
+            const SizedBox(height: 12),
+            TextField(controller: first, obscureText: true,
+              decoration: const InputDecoration(labelText: '备份密码')),
+            if (confirm) TextField(controller: again, obscureText: true,
+              decoration: const InputDecoration(labelText: '再次输入备份密码')),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消')),
+            FilledButton(onPressed: () {
+              if (first.text.length < 10 || (confirm && first.text != again.text)) {
+                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                  content: Text('密码至少10位，且两次输入必须一致')));
+                return;
+              }
+              Navigator.pop(ctx, first.text);
+            }, child: const Text('继续')),
+          ],
+        )));
+    } finally {
+      first.dispose();
+      again.dispose();
+    }
+  }
+
   Future<void> _upload() async {
     if (_busy) return;
-    // Until local end-to-end encryption ships, do not upload highly private
-    // records without explicit acknowledgement of WebDAV plaintext storage.
-    final allow = await showDialog<bool>(context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('确认上传到坚果云'),
-        content: const Text('当前备份是未加密的 JSON，可能包含日记、情绪和生理期记录。'
-          '坚果云连接使用 HTTPS，但云端文件本身不是端到端加密。'
-          '如果不接受此风险，请取消，等待加密备份功能。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('了解风险并上传')),
-        ],
-      ));
-    if (allow != true || !mounted) return;
+    final backupPassword = await _askBackupPassword(confirm: true);
+    if (backupPassword == null || !mounted) return;
     setState(() => _busy = true);
     try {
-      final result = await widget.controller.upload();
-      if (mounted) {
-        _message('上传成功：${result.createdAt.toLocal()}');
-      }
+      final result = await widget.controller.upload(backupPassword);
+      if (mounted) _message('AES-GCM 加密备份成功：${result.createdAt.toLocal()}');
     } catch (error) {
       if (mounted) _message('上传失败（本地数据未被修改）：$error');
     } finally {
@@ -214,17 +235,45 @@ class _CloudArchiveOperationsPageState extends State<CloudArchiveOperationsPage>
 
   Future<void> _downloadAndConfirm() async {
     if (_busy) return;
+    final backupPassword = await _askBackupPassword(confirm: false);
+    if (backupPassword == null || !mounted) return;
     setState(() => _busy = true);
     try {
-      // Download and verify SHA-256 before asking whether to restore.
-      final archive = await widget.controller.downloadLatest();
+      // Verify SHA-256 and the AES-GCM tag before touching local SQLite.
+      DownloadedArchive archive;
+      try {
+        archive = await widget.controller.downloadLatest(backupPassword);
+      } on LegacyPlaintextArchiveException {
+        if (!mounted) return;
+        final accepted = await showDialog<bool>(context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('旧版未加密备份'),
+            content: const Text('检测到旧版明文备份。仅允许本次明确确认后读取。'
+              '恢复后建议立即创建新的加密备份。'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('明确同意读取旧备份')),
+            ]));
+        if (accepted != true) return;
+        archive = await widget.controller.downloadLatest(backupPassword,
+            allowLegacyPlaintext: true);
+      }
       if (!mounted) return;
+      final preview = jsonDecode(archive.backupJson);
+      final tableMap = preview is Map ? preview['tables'] : null;
+      int count(String key) => tableMap is Map && tableMap[key] is List
+          ? (tableMap[key] as List).length : 0;
+      final summary = '任务 ${count('tasks')} 项、习惯 ${count('habits')} 项、'
+          '日记/情绪/经期 ${count('wellbeing_entries')} 天';
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('恢复云端存档？'),
           content: Text(
             '存档时间：${archive.info.createdAt.toLocal()}\n'
+            '内容预览：$summary\n'
             '恢复将替换当前设备的个人业务数据。'
             '请先确认本地已有独立备份。是否继续？',
           ),
@@ -241,7 +290,8 @@ class _CloudArchiveOperationsPageState extends State<CloudArchiveOperationsPage>
         ),
       );
       if (confirmed != true) return;
-      await widget.controller.restore(archive);
+      await CoreAutoSync.instance.withSyncPaused(
+          () => widget.controller.restore(archive));
       if (!mounted) return;
       // The caller reloads Today's data only after successful restore.
       Navigator.of(context).pop(true);
@@ -288,9 +338,9 @@ class _CloudArchiveOperationsPageState extends State<CloudArchiveOperationsPage>
         if (_busy) const Center(child: CircularProgressIndicator()),
         const SizedBox(height: 24),
         const Text(
-          '注意：恢复是高风险操作。当前实现只进行云端内容校验；'
-          '本地实际恢复必须复用现有的事务化备份恢复函数。'
-          '请勿在尚未测试原子恢复前使用真实重要数据。',
+          '新存档已使用 AES-256-GCM 客户端加密，恢复前会验证 SHA-256、口令和密文完整性。'
+          '恢复采用本地 SQLite 事务，并且只作用于当前账号。'
+          '请先保留一份独立备份；忘记密码无法恢复加密存档。',
         ),
       ]),
     );

@@ -24,9 +24,9 @@ import org.springframework.web.server.ResponseStatusException;
 public class CoreSyncController {
     private static final Set<String> TYPES = Set.of(
         "task", "task_record", "habit", "habit_record", "category",
-        "diary", "mood", "period"
+        "diary", "mood_custom"
     );
-    private static final Set<String> PRIVATE_TYPES = Set.of("diary", "mood", "period");
+    private static final Set<String> PRIVATE_TYPES = Set.of("diary", "mood_custom");
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final SyncEntitlementService entitlement;
@@ -55,7 +55,11 @@ public class CoreSyncController {
         List<String> dates = jdbc.query(
             "SELECT expires_at FROM user_sync_entitlement WHERE user_id=?",
             (rs, index) -> rs.getTimestamp(1).toInstant().toString(), userId);
-        return Map.of("active", entitlement.active(userId), "expiresAt", dates.isEmpty() ? "" : dates.get(0));
+        return Map.of("active", entitlement.active(userId),
+            "expiresAt", dates.isEmpty() ? "" : dates.get(0),
+            "planCode", "core_sync_annual", "annualPriceCny", "9.90",
+            "billingStatus", "payment_not_integrated",
+            "canDownloadAfterExpiry", true);
     }
 
     @GetMapping("/changes")
@@ -68,11 +72,11 @@ public class CoreSyncController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "无效的同步游标或数量");
         }
         var result = jdbc.query(
-            "SELECT cursor,record_type,record_id,revision,deleted,payload,changed_at " +
-            "FROM user_sync_change WHERE user_id=? AND cursor>? ORDER BY cursor ASC LIMIT ?",
+            "SELECT sync_cursor,record_type,record_id,revision,deleted,payload,changed_at " +
+            "FROM user_sync_change WHERE user_id=? AND sync_cursor>? ORDER BY sync_cursor ASC LIMIT ?",
             (rs, i) -> new SyncRecord(rs.getString("record_type"), rs.getString("record_id"),
                 rs.getLong("revision"), rs.getBoolean("deleted"), parse(rs.getString("payload")),
-                rs.getLong("cursor"), rs.getTimestamp("changed_at").toInstant().toString()),
+                rs.getLong("sync_cursor"), rs.getTimestamp("changed_at").toInstant().toString()),
             userId, cursor, limit + 1);
         boolean more = result.size() > limit;
         List<SyncRecord> page = more ? result.subList(0, limit) : result;
@@ -86,14 +90,22 @@ public class CoreSyncController {
         long userId = account(jwt);
         entitlement.require(userId);
         validate(request);
+        if (PRIVATE_TYPES.contains(request.type())) {
+            Integer configured = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM user_sync_crypto_config WHERE user_id=?", Integer.class, userId);
+            if (configured == null || configured == 0) {
+                throw new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED,
+                    "请先配置私密同步恢复口令");
+            }
+        }
         // Lock the account's stream before reading the record: guarantees cursor order
         // and prevents concurrent clients from both winning expectedRevision=0.
-        jdbc.update("INSERT INTO user_sync_clock(user_id,cursor) VALUES (?,0) " +
-            "ON DUPLICATE KEY UPDATE cursor=cursor", userId);
+        jdbc.update("INSERT INTO user_sync_clock(user_id,sync_cursor) VALUES (?,0) " +
+            "ON DUPLICATE KEY UPDATE sync_cursor=sync_cursor", userId);
         Long currentCursor = jdbc.queryForObject(
-            "SELECT cursor FROM user_sync_clock WHERE user_id=? FOR UPDATE", Long.class, userId);
+            "SELECT sync_cursor FROM user_sync_clock WHERE user_id=? FOR UPDATE", Long.class, userId);
         var replay = jdbc.query(
-            "SELECT record_type,record_id,revision,cursor,request_hash FROM user_sync_operation " +
+            "SELECT record_type,record_id,revision,sync_cursor,request_hash FROM user_sync_operation " +
             "WHERE user_id=? AND operation_id=?",
             (rs, i) -> Map.<String, Object>of("type",rs.getString(1),"id",rs.getString(2),
                 "revision",rs.getLong(3),"cursor",rs.getLong(4),
@@ -126,11 +138,11 @@ public class CoreSyncController {
                 "WHERE user_id=? AND record_type=? AND record_id=?",
                 revision,request.deleted(),body,userId,request.type(),request.id());
         }
-        jdbc.update("INSERT INTO user_sync_change(user_id,cursor,record_type,record_id,revision,deleted,payload) " +
+        jdbc.update("INSERT INTO user_sync_change(user_id,sync_cursor,record_type,record_id,revision,deleted,payload) " +
             "VALUES(?,?,?,?,?,?,?)",userId,next,request.type(),request.id(),revision,request.deleted(),body);
-        jdbc.update("INSERT INTO user_sync_operation(user_id,operation_id,record_type,record_id,revision,cursor,request_hash) " +
+        jdbc.update("INSERT INTO user_sync_operation(user_id,operation_id,record_type,record_id,revision,sync_cursor,request_hash) " +
             "VALUES(?,?,?,?,?,?,?)",userId,request.operationId(),request.type(),request.id(),revision,next,fingerprint(request));
-        jdbc.update("UPDATE user_sync_clock SET cursor=? WHERE user_id=?",next,userId);
+        jdbc.update("UPDATE user_sync_clock SET sync_cursor=? WHERE user_id=?",next,userId);
         return new MutationResult(revision,next,false);
     }
 
@@ -152,11 +164,21 @@ public class CoreSyncController {
             }
             if (PRIVATE_TYPES.contains(r.type()) &&
                 (!"aes-256-gcm".equals(r.payload().path("alg").asText()) ||
-                 !r.payload().path("ciphertext").isTextual() ||
-                 !r.payload().path("nonce").isTextual())) {
+                 r.payload().path("keyVersion").asInt() != 1 ||
+                 !base64Size(r.payload().path("ciphertext").asText(), 1, 65536) ||
+                 !base64Size(r.payload().path("nonce").asText(), 12, 12) ||
+                 !base64Size(r.payload().path("tag").asText(), 16, 16))) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"敏感数据必须使用客户端加密信封");
             }
         }
+    }
+
+    private boolean base64Size(String encoded, int min, int max) {
+        if (encoded == null || encoded.length() > 90000) return false;
+        try {
+            int bytes = java.util.Base64.getDecoder().decode(encoded).length;
+            return bytes >= min && bytes <= max;
+        } catch (IllegalArgumentException ex) { return false; }
     }
 
     private String fingerprint(Mutation m) {

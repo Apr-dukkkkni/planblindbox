@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'private_sync_vault.dart';
 
 // Connect ONLY to the local backup export/restore code that your project
 // already uses. Never replace this with ad-hoc SQL DELETE/INSERT statements.
@@ -127,6 +128,7 @@ class JianguoyunWebDav {
   Future<CloudArchiveInfo> upload(
     WebDavCredentials credentials,
     String backupJson,
+    String backupPassword,
   ) async {
     final payload = jsonDecode(backupJson); // Validate before any network write.
     if (payload is! Map<String, dynamic> ||
@@ -142,11 +144,14 @@ class JianguoyunWebDav {
     final timestamp = created.toIso8601String()
         .replaceAll(':', '').replaceAll('.', '').replaceAll('-', '');
     final fileName = 'pbb_${timestamp}_$random.json';
+    final encrypted = await WebDavArchiveCipher.encrypt(
+        backupJson, backupPassword, owner);
     final envelope = jsonEncode({
       'app': 'PlanBlindBox',
-      'archiveVersion': 1,
+      'archiveVersion': 2,
+      'owner': owner,
       'createdAt': created.toIso8601String(),
-      'payload': payload,
+      'encrypted': encrypted,
     });
     final digest = sha256.convert(utf8.encode(envelope)).toString();
 
@@ -175,7 +180,8 @@ class JianguoyunWebDav {
   }
 
   Future<DownloadedArchive> downloadLatest(
-    WebDavCredentials credentials, int owner,
+    WebDavCredentials credentials, int owner, String backupPassword,
+    {bool allowLegacyPlaintext = false}
   ) async {
     Uri folder = _accountFolder(owner);
     var pointerResponse = await _send('GET', folder.resolve('latest.json'), credentials);
@@ -210,29 +216,46 @@ class JianguoyunWebDav {
     final envelope = jsonDecode(utf8.decode(response.bodyBytes));
     if (envelope is! Map<String, dynamic> ||
         envelope['app'] != 'PlanBlindBox' ||
-        envelope['archiveVersion'] != 1 ||
-        envelope['createdAt'] is! String ||
-        !envelope.containsKey('payload')) {
+        envelope['createdAt'] is! String) {
       throw const FormatException('存档格式或版本不支持，未执行恢复');
     }
-    final payload = envelope['payload'];
+    final createdAt = DateTime.tryParse(envelope['createdAt'] as String);
+    if (createdAt == null) throw const FormatException('存档时间无效');
+    late final String plaintext;
+    if (envelope['archiveVersion'] == 2) {
+      if (envelope['owner'] != owner || envelope['encrypted'] is! Map) {
+        throw const FormatException('云端存档属于其他账号，已拒绝恢复');
+      }
+      plaintext = await WebDavArchiveCipher.decrypt(
+          Map<String, dynamic>.from(envelope['encrypted'] as Map),
+          backupPassword, owner);
+    } else if (envelope['archiveVersion'] == 1) {
+      // Old unencrypted snapshots require a second, explicit user opt-in.
+      if (!allowLegacyPlaintext) throw const LegacyPlaintextArchiveException();
+      plaintext = jsonEncode(envelope['payload']);
+    } else {
+      throw const FormatException('存档版本不支持，未执行恢复');
+    }
+    final payload = jsonDecode(plaintext);
     if (payload is! Map<String, dynamic> || payload['backupUserId'] != owner ||
         payload['format'] != 'planblindbox-local-backup') {
       throw const FormatException('云端存档属于其他账号，已拒绝恢复');
     }
-    final createdAt = DateTime.tryParse(envelope['createdAt'] as String);
-    if (createdAt == null) {
-      throw const FormatException('存档时间无效');
-    }
     return DownloadedArchive(
       info: CloudArchiveInfo(createdAt: createdAt, fileName: fileName),
-      backupJson: jsonEncode(envelope['payload']),
+      backupJson: plaintext,
     );
   }
 
   void dispose() {
     if (_ownsClient) _client.close();
   }
+}
+
+class LegacyPlaintextArchiveException implements Exception {
+  const LegacyPlaintextArchiveException();
+  @override
+  String toString() => '检测到未加密的旧版备份，需要明确确认后恢复';
 }
 
 class CloudArchiveController {
@@ -249,7 +272,7 @@ class CloudArchiveController {
   final ArchiveCredentialStore store;
   final JianguoyunWebDav webDav;
 
-  Future<CloudArchiveInfo> upload() async {
+  Future<CloudArchiveInfo> upload(String backupPassword) async {
     final credentials = await store.read();
     if (credentials == null) throw StateError('请先配置坚果云');
     final data = await bridge.exportJson();
@@ -257,13 +280,15 @@ class CloudArchiveController {
     if (decoded is! Map || decoded['backupUserId'] != currentOwner()) {
       throw StateError('账号在备份过程中已切换，上传已取消');
     }
-    return webDav.upload(credentials, data);
+    return webDav.upload(credentials, data, backupPassword);
   }
 
-  Future<DownloadedArchive> downloadLatest() async {
+  Future<DownloadedArchive> downloadLatest(String backupPassword,
+      {bool allowLegacyPlaintext = false}) async {
     final credentials = await store.read();
     if (credentials == null) throw StateError('请先配置坚果云');
-    return webDav.downloadLatest(credentials, currentOwner());
+    return webDav.downloadLatest(credentials, currentOwner(), backupPassword,
+        allowLegacyPlaintext: allowLegacyPlaintext);
   }
 
   // Restore MUST be atomic in the existing local backup implementation.

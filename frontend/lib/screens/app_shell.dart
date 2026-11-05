@@ -13,6 +13,7 @@ import '../auth/auth_session.dart';
 import '../data/stats_api.dart';
 import '../data/wellbeing_repository.dart';
 import '../widgets/quick_action_ball.dart';
+import '../services/core_auto_sync.dart';
 import 'habit_management_page.dart';
 import 'fishing_session_dialog.dart';
 import 'wellbeing_pages.dart';
@@ -44,11 +45,13 @@ class _AppShellState extends State<AppShell> {
   int _statsVersion = 0;
   int _myVersion = 0;
   int _closeBallToken = 0;
+  int _seenSyncGeneration = CoreAutoSync.instance.appliedGeneration;
 
   @override
   void initState() {
     super.initState();
     widget.auth.addListener(_onAccountChanged);
+    CoreAutoSync.instance.addListener(_onSyncApplied);
 
     // 首次显示应用页面后，自动尝试每日签到。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -58,6 +61,17 @@ class _AppShellState extends State<AppShell> {
 
   void _onAccountChanged() {
     if (mounted) setState(() => _todayVersion++);
+  }
+
+  void _onSyncApplied() {
+    final current = CoreAutoSync.instance.appliedGeneration;
+    if (!mounted || current == _seenSyncGeneration) return;
+    _seenSyncGeneration = current;
+    setState(() {
+      _todayVersion++;
+      _statsVersion++;
+      _myVersion++;
+    });
   }
 
   bool get _isFemale {
@@ -127,6 +141,7 @@ class _AppShellState extends State<AppShell> {
   @override
   void dispose() {
     widget.auth.removeListener(_onAccountChanged);
+    CoreAutoSync.instance.removeListener(_onSyncApplied);
     super.dispose();
   }
 

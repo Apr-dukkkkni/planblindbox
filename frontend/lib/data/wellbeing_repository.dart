@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import 'local/local_database.dart';
+import '../services/private_sync_vault.dart';
 
 /// 情绪、经期和日记只保存在当前设备的 SQLite 中；与注册账号资料分开。
 class MoodChoice {
@@ -129,6 +130,8 @@ class WellbeingRepository {
       await txn.insert('wellbeing_entries', {
         'user_id': userId,
         'business_date': key,
+        'sync_uuid': userId > 0 && PrivateSyncVault.instance.unlocked(-1000000 - userId)
+            ? PrivateSyncVault.instance.idForDay(-1000000 - userId, key) : null,
         'update_time': DateTime.now().toIso8601String(),
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
       await txn.update('wellbeing_entries', {

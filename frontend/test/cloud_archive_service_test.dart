@@ -41,9 +41,16 @@ void main() {
 
     const original =
         '{"format":"planblindbox-local-backup","backupUserId":1,"tasks":[{"title":"读书"}],"coins":30}';
-    await dav.upload(credentials, original);
-    final downloaded = await dav.downloadLatest(credentials, ownerId);
+    await dav.upload(credentials, original, 'test-archive-password-2026');
+    final downloaded = await dav.downloadLatest(credentials, ownerId, 'test-archive-password-2026');
     expect(jsonDecode(downloaded.backupJson), jsonDecode(original));
+    final archiveFile = remoteFiles.entries.firstWhere(
+        (entry) => entry.key.endsWith('.json') &&
+            !entry.key.endsWith('/latest.json')).value;
+    expect(archiveFile.contains('读书'), isFalse);
+    await expectLater(
+        dav.downloadLatest(credentials, ownerId, 'wrong-password-2026'),
+        throwsA(isA<StateError>()));
     expect(
       remoteFiles.keys.any((p) => p.endsWith('/account_1/latest.json')),
       isTrue,
@@ -75,12 +82,13 @@ void main() {
     await dav.upload(
       credentials,
       '{"format":"planblindbox-local-backup","backupUserId":1,"some":"data"}',
+      'test-archive-password-2026',
     );
     final fileKey = remoteFiles.keys.firstWhere((p) =>
         p.endsWith('.json') && !p.endsWith('/latest.json'));
     remoteFiles[fileKey] = '{"tampered":true}';
     await expectLater(
-      dav.downloadLatest(credentials, ownerId),
+      dav.downloadLatest(credentials, ownerId, 'test-archive-password-2026'),
       throwsA(isA<FormatException>()),
     );
     dav.dispose();

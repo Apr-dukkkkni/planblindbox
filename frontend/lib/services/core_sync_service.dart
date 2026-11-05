@@ -42,6 +42,19 @@ class CoreSyncClient {
         .timeout(const Duration(seconds: 15)),
   );
 
+  Future<Map<String, dynamic>> cryptoConfig(String token) async => _read(
+    await _client.get(_path('/crypto'), headers: _headers(token))
+        .timeout(const Duration(seconds: 20)),
+  );
+
+  Future<Map<String, dynamic>> createCryptoConfig(String token, {
+    required String salt, required int iterations,
+    required Map<String, dynamic> verifier,
+  }) async => _read(await _client.put(_path('/crypto'),
+    headers: _headers(token),
+    body: jsonEncode({'salt': salt, 'iterations': iterations,
+      'verifier': verifier})).timeout(const Duration(seconds: 20)));
+
   /// Pull from a persisted per-account cursor. Apply changes to SQLite in a
   /// transaction before persisting the returned cursor; otherwise data can be lost.
   Future<Map<String, dynamic>> changes(String token, {

@@ -9,6 +9,7 @@ import 'theme/app_theme.dart';
 import 'screens/app_shell.dart';
 import 'services/app_preferences.dart';
 import 'services/cloud_archive_service.dart';
+import 'services/core_auto_sync.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,7 +25,7 @@ class PlanBlindBoxApp extends StatefulWidget {
   State<PlanBlindBoxApp> createState() => _PlanBlindBoxAppState();
 }
 
-class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
+class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> with WidgetsBindingObserver {
   late final AuthSession _auth = AuthSession(AuthApi(baseUrl: ModMarketApi.baseUrl));
   bool _firstLoginScreen = true;
   late TodayApi _api = _newApi(ApiConfig.userId);
@@ -42,6 +43,12 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
     final int target = accountId == null
         ? ApiConfig.userId
         : -1000000 - accountId;
+    // 登录成功或重新联网后绑定后台同步；游客/离线状态不会上传。
+    CoreAutoSync.instance.bind(
+      localUserId: target,
+      token: _auth.token,
+      baseUrl: _auth.api.baseUrl,
+    );
     if (target == _activeLocalUserId) return;
     _api.dispose();
     _api = _newApi(target);
@@ -51,6 +58,7 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _auth.restore();
   }
 
@@ -71,7 +79,14 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> {
 
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) CoreAutoSync.instance.syncNow();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    CoreAutoSync.instance.stop();
     _api.dispose();
     _auth.dispose();
     _auth.api.dispose();

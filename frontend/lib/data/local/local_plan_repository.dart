@@ -67,6 +67,7 @@ class LocalPlanRepository {
     'custom_purchase_records',
     'custom_use_records',
     'app_settings',
+    'core_sync_rescue',
   ];
 
   static const _restoreDeleteOrder = <String>[
@@ -95,6 +96,7 @@ class LocalPlanRepository {
     'daily_sign_ins',
     'user_assets',
     'app_settings',
+    'core_sync_rescue',
   ];
 
   static const _restoreInsertOrder = <String>[
@@ -123,6 +125,7 @@ class LocalPlanRepository {
     'custom_purchase_records',
     'custom_use_records',
     'app_settings',
+    'core_sync_rescue',
   ];
 
   static const _statusTables = <String, String>{
@@ -1866,6 +1869,11 @@ class LocalPlanRepository {
   }
 
   Future<List<Map<String, Object?>>> _exportTableForAccount(Database db,String table) async {
+    if (table == 'core_sync_rescue') {
+      final rows = await db.query(table, where: 'user_id=?', whereArgs: [userId]);
+      return rows.map((item) => Map<String, Object?>.from(item)
+        ..remove('rescue_id')).toList();
+    }
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((col) => col['name']=='user_id')) {
       return db.query(table, where:'user_id=?', whereArgs:[_ownerForTable(table)]);
@@ -1897,11 +1905,13 @@ class LocalPlanRepository {
     }
     final backupDatabaseVersion = _int(decoded['databaseVersion'], -1);
     final currentDatabaseVersion = await db.getVersion();
-    final restoreLegacyV1 = backupDatabaseVersion == 1 && currentDatabaseVersion == 4;
-    final restoreLegacyV2 = backupDatabaseVersion == 2 && currentDatabaseVersion == 4;
-    final restoreLegacyV3 = backupDatabaseVersion == 3 && currentDatabaseVersion == 4;
+    final restoreLegacyV1 = backupDatabaseVersion == 1 && (currentDatabaseVersion == 4 || currentDatabaseVersion == 5 || currentDatabaseVersion == 6);
+    final restoreLegacyV2 = backupDatabaseVersion == 2 && (currentDatabaseVersion == 4 || currentDatabaseVersion == 5 || currentDatabaseVersion == 6);
+    final restoreLegacyV3 = backupDatabaseVersion == 3 && (currentDatabaseVersion == 4 || currentDatabaseVersion == 5 || currentDatabaseVersion == 6);
+    final restoreLegacyV4 = backupDatabaseVersion == 4 && (currentDatabaseVersion == 5 || currentDatabaseVersion == 6);
+    final restoreLegacyV5 = backupDatabaseVersion == 5 && currentDatabaseVersion == 6;
     if (backupDatabaseVersion != currentDatabaseVersion &&
-        !restoreLegacyV1 && !restoreLegacyV2 && !restoreLegacyV3) {
+        !restoreLegacyV1 && !restoreLegacyV2 && !restoreLegacyV3 && !restoreLegacyV4 && !restoreLegacyV5) {
       throw ApiException(
         '备份数据库版本为 $backupDatabaseVersion，当前版本为 $currentDatabaseVersion，暂不支持跨版本恢复',
         statusCode: 400,
@@ -1914,7 +1924,7 @@ class LocalPlanRepository {
     final prepared = <String, List<Map<String, Object?>>>{};
     for (final table in _backupTables) {
       final rawRows = rawTables[table];
-      if (rawRows is! List && !((restoreLegacyV1 || restoreLegacyV2) &&
+      if (rawRows is! List && !((restoreLegacyV1 || restoreLegacyV2 || restoreLegacyV3 || restoreLegacyV4 || restoreLegacyV5) && table == 'core_sync_rescue') && !((restoreLegacyV1 || restoreLegacyV2) &&
           table == 'custom_product_categories') && !((restoreLegacyV1 || restoreLegacyV2 || restoreLegacyV3) &&
           const {'wellbeing_entries', 'wellbeing_moods'}.contains(table)) && !(restoreLegacyV1 &&
           const {'custom_products', 'custom_inventory',
@@ -1968,6 +1978,15 @@ class LocalPlanRepository {
           }
         }
       }
+      // Reset sync metadata so restored offline snapshots are bootstrapped
+      // as local changes, rather than mistaken for already-uploaded versions.
+      // Never delete another account's sync state or trusted server wallet.
+      for (final table in const [
+        'core_sync_outbox', 'core_sync_dirty', 'core_sync_state',
+        'core_sync_cursor', 'core_sync_conflict', 'core_sync_deferred',
+      ]) {
+        await txn.delete(table, where: 'user_id=?', whereArgs: [userId]);
+      }
       await txn.insert(
         'app_settings',
         {
@@ -1995,7 +2014,7 @@ class LocalPlanRepository {
         'custom_products','custom_product_categories',
         'shop_open_records','collectible_acquisition_records','user_collectibles',
         'time_records','habits','tasks','task_categories',
-        'asset_records','daily_sign_ins','user_assets',
+        'asset_records','daily_sign_ins','user_assets','core_sync_rescue',
       ];
       for (final table in tables) {
         await txn.delete(table,where:'user_id=?',whereArgs:[_ownerForTable(table)]);

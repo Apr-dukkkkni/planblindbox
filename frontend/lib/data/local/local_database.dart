@@ -68,11 +68,13 @@ class LocalDatabase {
     return factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 6,
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) await _createCustomShopSchema(db);
           if (oldVersion < 3) await _upgradeProductCategories(db);
           if (oldVersion < 4) await _createWellbeingSchema(db);
+          if (oldVersion < 5) await _createCoreSyncSchema(db);
+          if (oldVersion < 6) await _createPrivateSyncSchema(db);
         },
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
@@ -330,6 +332,162 @@ class LocalDatabase {
     await _createCustomShopSchema(db);
     await _upgradeProductCategories(db);
     await _createWellbeingSchema(db);
+    await _createCoreSyncSchema(db);
+    await _createPrivateSyncSchema(db);
+  }
+
+  /// 仅新增同步元数据，绝不覆盖已有任务或习惯。
+  /// 本地变更与业务写入共享 SQLite 事务，断网也保留待同步标记。
+  Future<void> _createCoreSyncSchema(DatabaseExecutor db) async {
+    const uuidSql = "lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || "
+        "'-4' || substr(hex(randomblob(2)),2) || '-a' || "
+        "substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6)))";
+    for (final table in const ['tasks', 'habits']) {
+      final cols = await db.rawQuery('PRAGMA table_info($table)');
+      if (!cols.any((row) => row['name'] == 'sync_uuid')) {
+        await db.execute('ALTER TABLE $table ADD COLUMN sync_uuid TEXT');
+      }
+      await db.execute('UPDATE $table SET sync_uuid=$uuidSql '
+          "WHERE sync_uuid IS NULL OR sync_uuid=''");
+      await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_${table}_sync_uuid '
+          'ON $table(sync_uuid)');
+    }
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_runtime (
+      id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 1
+    )''');
+    await db.execute('INSERT OR IGNORE INTO core_sync_runtime(id,enabled) VALUES(1,1)');
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_dirty (
+      user_id INTEGER NOT NULL,
+      record_type TEXT NOT NULL,
+      record_uuid TEXT NOT NULL,
+      local_id INTEGER,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      generation INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY(user_id,record_type,record_uuid)
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_state (
+      user_id INTEGER NOT NULL, record_type TEXT NOT NULL,
+      record_uuid TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(user_id,record_type,record_uuid)
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_outbox (
+      user_id INTEGER NOT NULL, record_type TEXT NOT NULL,
+      record_uuid TEXT NOT NULL, operation_id TEXT NOT NULL,
+      expected_revision INTEGER NOT NULL, deleted INTEGER NOT NULL,
+      payload TEXT, source_generation INTEGER NOT NULL,
+      PRIMARY KEY(user_id,record_type,record_uuid)
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_cursor (
+      user_id INTEGER PRIMARY KEY, cursor INTEGER NOT NULL DEFAULT 0,
+      bootstrapped INTEGER NOT NULL DEFAULT 0
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_conflict (
+      user_id INTEGER NOT NULL, record_type TEXT NOT NULL,
+      record_uuid TEXT NOT NULL, remote_revision INTEGER NOT NULL,
+      remote_deleted INTEGER NOT NULL, remote_payload TEXT,
+      PRIMARY KEY(user_id,record_type,record_uuid)
+    )''');
+
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_deferred (
+      user_id INTEGER NOT NULL, record_type TEXT NOT NULL,
+      record_uuid TEXT NOT NULL, revision INTEGER NOT NULL,
+      deleted INTEGER NOT NULL, payload TEXT,
+      PRIMARY KEY(user_id,record_type,record_uuid)
+    )''');
+
+    await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_rescue (
+      rescue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL, record_type TEXT NOT NULL,
+      record_uuid TEXT NOT NULL, remote_revision INTEGER NOT NULL,
+      local_payload TEXT, remote_payload TEXT, chosen TEXT NOT NULL,
+      resolved_at TEXT NOT NULL
+    )''');
+
+    for (final entity in const ['task', 'habit']) {
+      final table = entity == 'task' ? 'tasks' : 'habits';
+      final pk = entity == 'task' ? 'task_id' : 'habit_id';
+      final guard = '(SELECT enabled FROM core_sync_runtime WHERE id=1)=1';
+      final upd = '''INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
+        VALUES(NEW.user_id,'$entity',(SELECT sync_uuid FROM $table WHERE $pk=NEW.$pk),NEW.$pk,0)
+        ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+          local_id=excluded.local_id,deleted=0,generation=generation+1;''';
+      await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_insert
+        AFTER INSERT ON $table WHEN $guard BEGIN
+        UPDATE $table SET sync_uuid=$uuidSql
+          WHERE $pk=NEW.$pk AND (sync_uuid IS NULL OR sync_uuid='');
+        $upd
+      END''');
+      await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_update
+        AFTER UPDATE ON $table WHEN $guard BEGIN $upd END''');
+      await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_delete
+        AFTER DELETE ON $table WHEN $guard AND OLD.sync_uuid IS NOT NULL BEGIN
+        INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
+        VALUES(OLD.user_id,'$entity',OLD.sync_uuid,NULL,1)
+        ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+          local_id=NULL,deleted=1,generation=generation+1;
+      END''');
+      final children = entity == 'task'
+          ? ['task_records', 'task_cycle_records'] : ['habit_records'];
+      for (final child in children) {
+        for (final action in const ['INSERT', 'UPDATE', 'DELETE']) {
+          final alias = action == 'DELETE' ? 'OLD' : 'NEW';
+          await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${child}_${action.toLowerCase()}
+            AFTER $action ON $child WHEN $guard BEGIN
+            INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
+            SELECT p.user_id,'$entity',p.sync_uuid,p.$pk,0
+              FROM $table p WHERE p.$pk=$alias.$pk AND p.sync_uuid IS NOT NULL
+            ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+              local_id=excluded.local_id,deleted=0,generation=generation+1;
+          END''');
+        }
+      }
+    }
+  }
+
+  /// One daily encrypted record. The HMAC UUID contains no plaintext date.
+  Future<void> _createPrivateSyncSchema(DatabaseExecutor db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(wellbeing_entries)');
+    if (!cols.any((row) => row['name'] == 'sync_uuid')) {
+      await db.execute('ALTER TABLE wellbeing_entries ADD COLUMN sync_uuid TEXT');
+    }
+    await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_wellbeing_sync_uuid '
+        'ON wellbeing_entries(user_id,sync_uuid)');
+    const dirty = '''INSERT INTO core_sync_dirty
+      (user_id,record_type,record_uuid,local_id,deleted)
+      VALUES(-1000000 - NEW.user_id,'diary',NEW.sync_uuid,NULL,0)
+      ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+        deleted=0,generation=generation+1;''';
+    const guard = '(SELECT enabled FROM core_sync_runtime WHERE id=1)=1';
+    await db.execute('''CREATE TRIGGER IF NOT EXISTS private_sync_insert
+      AFTER INSERT ON wellbeing_entries
+      WHEN $guard AND NEW.user_id > 0 AND NEW.sync_uuid IS NOT NULL
+      BEGIN $dirty END''');
+    await db.execute('''CREATE TRIGGER IF NOT EXISTS private_sync_update
+      AFTER UPDATE ON wellbeing_entries
+      WHEN $guard AND NEW.user_id > 0 AND NEW.sync_uuid IS NOT NULL
+      BEGIN $dirty END''');
+    await db.execute('''CREATE TRIGGER IF NOT EXISTS private_sync_delete
+      AFTER DELETE ON wellbeing_entries
+      WHEN $guard AND OLD.user_id > 0 AND OLD.sync_uuid IS NOT NULL
+      BEGIN
+      INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
+        VALUES(-1000000 - OLD.user_id,'diary',OLD.sync_uuid,NULL,1)
+        ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+          local_id=NULL,deleted=1,generation=generation+1;
+      END''');
+    const moodUuid = '2c5e5b7a-c84b-4547-b681-000000000000';
+    for (final action in const ['INSERT', 'UPDATE', 'DELETE']) {
+      final alias = action == 'DELETE' ? 'OLD' : 'NEW';
+      await db.execute('''CREATE TRIGGER IF NOT EXISTS private_moods_${action.toLowerCase()}
+        AFTER $action ON wellbeing_moods
+        WHEN $guard AND $alias.user_id > 0 BEGIN
+        INSERT INTO core_sync_dirty
+          (user_id,record_type,record_uuid,local_id,deleted)
+        VALUES(-1000000 - $alias.user_id,'mood_custom','$moodUuid',NULL,0)
+        ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+          generation=generation+1;
+        END''');
+    }
   }
 
   /// 每日情绪、经期、日记（与账号资料分离），数据库升级只新增表，不清空旧数据。
