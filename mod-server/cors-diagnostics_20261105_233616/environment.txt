@@ -1,0 +1,7 @@
+﻿Relevant environment variables (secret values intentionally excluded):
+SPRING_PROFILES_ACTIVE=
+
+SERVER_SERVLET_CONTEXT_PATH=
+
+MOD_ALLOWED_ORIGINS=
+

@@ -81,8 +81,8 @@ class _AppShellState extends State<AppShell> {
   }
 
   // 生理期/日记按当前登录账号隔离；游客使用单独的负数 ID。
-  int get _wellbeingUserId => widget.auth.isSignedIn
-      ? (widget.auth.user?.userId ?? -1) : -1;
+  int get _wellbeingUserId =>
+      widget.auth.isSignedIn ? (widget.auth.user?.userId ?? -1) : -1;
 
   WellbeingRepository get _wellbeing => WellbeingRepository(
     userId: _wellbeingUserId,
@@ -93,33 +93,55 @@ class _AppShellState extends State<AppShell> {
     try {
       await action();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('操作失败：$e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('操作失败：$e')));
+      }
     }
   }
 
   Future<void> _quickTask() => _safeAction(() async {
     final created = await showModalBottomSheet<bool>(
-      context: context, isScrollControlled: true, showDragHandle: true,
-      builder: (_) => TaskComposer(api: widget.api));
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => TaskComposer(api: widget.api),
+    );
     if (created == true && mounted) setState(() => _todayVersion++);
   });
 
   Future<void> _quickHabit() => _safeAction(() async {
     final today = await widget.api.getToday();
     if (!mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => HabitManagementPage(
-        api: widget.api, businessDate: today.date, autoCreate: true)));
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => HabitManagementPage(
+          api: widget.api,
+          businessDate: today.date,
+          autoCreate: true,
+        ),
+      ),
+    );
     if (mounted) setState(() => _todayVersion++);
   });
 
   Future<void> _quickFishing() => _safeAction(() async {
-    final stats = StatsApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
+    final stats = StatsApi(
+      baseUrl: widget.api.baseUrl,
+      userId: widget.api.userId,
+    );
     try {
-      await showDialog<int>(context: context, barrierDismissible: false,
-        builder: (_) => FishingSessionDialog(api: stats));
-      if (mounted) setState(() { _timeVersion++; _statsVersion++; });
+      await showDialog<int>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => FishingSessionDialog(api: stats),
+      );
+      if (mounted)
+        setState(() {
+          _timeVersion++;
+          _statsVersion++;
+        });
     } finally {
       stats.dispose();
     }
@@ -129,8 +151,11 @@ class _AppShellState extends State<AppShell> {
     final mood = await showMoodPicker(context, _wellbeing);
     if (mood == null) return;
     await _wellbeing.saveMood(DateTime.now(), mood);
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已记录今天的心情：${mood.emoji} ${mood.name}')));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已记录今天的心情：${mood.emoji} ${mood.name}')),
+      );
+    }
   });
 
   Future<void> _quickPeriod() => _safeAction(() async {
@@ -157,19 +182,33 @@ class _AppShellState extends State<AppShell> {
       final rewarded = (result['totalWater'] as num).toInt();
       // 仅保存一个只读的日历标记，不触碰 SQLite 本地资产水滴字段。
       await widget.api.repository.recordServerSignIn(
-        businessDate: businessDate, streakDay: streak, totalWater: rewarded);
+        businessDate: businessDate,
+        streakDay: streak,
+        totalWater: rewarded,
+      );
       if (!mounted || widget.auth.token != token) return;
-      setState(() { _todayVersion++; _myVersion++; });
+      setState(() {
+        _todayVersion++;
+        _myVersion++;
+      });
       if (result['granted'] != true ||
-          !AppPreferences.instance.showDailySignInNotice) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('服务器签到成功！连续第 $streak 天，获得 $rewarded 滴水滴。'),
-        duration: const Duration(seconds: 4)));
+          !AppPreferences.instance.showDailySignInNotice) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('服务器签到成功！连续第 $streak 天，获得 $rewarded 滴水滴。'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     } catch (error) {
       if (!mounted || widget.auth.token != token) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('服务器签到未成功：$error（本地任务可继续使用）'),
-        duration: const Duration(seconds: 4)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('服务器签到未成功：$error（本地任务可继续使用）'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
@@ -195,50 +234,49 @@ class _AppShellState extends State<AppShell> {
     return Scaffold(
       key: _scaffoldKey,
       drawer: ModHubDrawer(api: widget.api, auth: widget.auth),
-      body: Stack(children: [
-        IndexedStack(
-          index: _selectedIndex,
-          children: [
-          TodayPage(
-            key: ValueKey('today-$_todayVersion'),
-            api: widget.api,
-            archiveController: widget.archiveController,
-            isFemale: _isFemale,
-            wellbeingUserId: _wellbeingUserId,
-            onOpenModDrawer: () => _scaffoldKey.currentState?.openDrawer(),
+      body: Stack(
+        children: [
+          IndexedStack(
+            index: _selectedIndex,
+            children: [
+              TodayPage(
+                key: ValueKey('today-$_todayVersion'),
+                api: widget.api,
+                archiveController: widget.archiveController,
+                isFemale: _isFemale,
+                wellbeingUserId: _wellbeingUserId,
+                onOpenModDrawer: () => _scaffoldKey.currentState?.openDrawer(),
+              ),
+              TimePage(
+                key: ValueKey('time-$_timeVersion'),
+                api: widget.api,
+                refreshToken: _timeVersion,
+              ),
+              StorePage(api: widget.api, refreshToken: _storeVersion),
+              StatsPage(
+                api: widget.api,
+                isFemale: _isFemale,
+                wellbeingUserId: _wellbeingUserId,
+                refreshToken: _statsVersion,
+              ),
+              MyPage(
+                api: widget.api,
+                auth: widget.auth,
+                refreshToken: _myVersion,
+              ),
+            ],
           ),
-          TimePage(
-            key: ValueKey('time-$_timeVersion'),
-            api: widget.api,
-            refreshToken: _timeVersion,
+          QuickActionBall(
+            closeToken: _closeBallToken,
+            showPeriod: _isFemale,
+            onPeriod: _quickPeriod,
+            onMood: _quickMood,
+            onTask: _quickTask,
+            onHabit: _quickHabit,
+            onFishing: _quickFishing,
           ),
-          StorePage(
-            api: widget.api,
-            refreshToken: _storeVersion,
-          ),
-          StatsPage(
-            api: widget.api,
-            isFemale: _isFemale,
-            wellbeingUserId: _wellbeingUserId,
-            refreshToken: _statsVersion,
-          ),
-          MyPage(
-            api: widget.api,
-            auth: widget.auth,
-            refreshToken: _myVersion,
-          ),
-          ],
-        ),
-        QuickActionBall(
-          closeToken: _closeBallToken,
-          showPeriod: _isFemale,
-          onPeriod: _quickPeriod,
-          onMood: _quickMood,
-          onTask: _quickTask,
-          onHabit: _quickHabit,
-          onFishing: _quickFishing,
-        ),
-      ]),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: _selectTab,

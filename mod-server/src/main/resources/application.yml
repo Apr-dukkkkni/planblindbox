@@ -27,7 +27,7 @@ spring:
     enabled: true
 mod:
   admin-token: ${MOD_ADMIN_TOKEN:}
-  allowed-origins: ${MOD_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}
+  allowed-origins: ${MOD_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*}
 auth:
   jwt:
     secret-base64: ${APP_JWT_SECRET_BASE64:}
@@ -39,3 +39,8 @@ auth:
     mail-from: ${MAIL_FROM:}
   avatars:
     directory: ${APP_AVATAR_DIR:./data/avatars}
+
+opaque:
+  service:
+    url: ${OPAQUE_SERVICE_URL:http://127.0.0.1:8092}
+    internal-secret: ${OPAQUE_INTERNAL_SECRET:}

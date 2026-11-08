@@ -1,0 +1,14 @@
+{
+  "name": "planblindbox-opaque-service",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node smoke-test.mjs"
+  },
+  "dependencies": {
+    "@serenity-kit/opaque": "1.1.0",
+    "express": "^4.21.2"
+  }
+}

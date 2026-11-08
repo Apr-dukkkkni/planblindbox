@@ -266,7 +266,7 @@ class _CloudArchiveOperationsPageState extends State<CloudArchiveOperationsPage>
       int count(String key) => tableMap is Map && tableMap[key] is List
           ? (tableMap[key] as List).length : 0;
       final summary = '任务 ${count('tasks')} 项、习惯 ${count('habits')} 项、'
-          '日记/情绪/经期 ${count('wellbeing_entries')} 天';
+          '加密私密记录 ${count('private_vault_records')} 条';
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(

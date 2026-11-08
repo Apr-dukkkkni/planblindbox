@@ -141,12 +141,13 @@ void main() {
     expect(await repository.getShopHistory(), hasLength(1));
   });
 
-  test('每日签到幂等，重复调用不重复增加水滴', () async {
-    final first = await api.dailySignIn();
-    final second = await api.dailySignIn();
-    expect(first['granted'], true);
-    expect(second['granted'], false);
-    expect(second['waterBalance'], 5);
+  test('本地 TodayApi 不发放水滴，必须使用服务器签到接口', () async {
+    await expectLater(
+      api.dailySignIn(),
+      throwsA(isA<StateError>()),
+    );
+    final today = await api.getToday();
+    expect(today.assets.water, 0);
   });
 }
 

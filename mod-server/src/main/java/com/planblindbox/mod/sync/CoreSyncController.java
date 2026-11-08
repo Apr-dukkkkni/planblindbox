@@ -20,13 +20,15 @@ import org.springframework.web.server.ResponseStatusException;
 
 /** Core record protocol. No UI or SQLite implementation details are accepted here. */
 @RestController
-@RequestMapping("/api/v1/me/sync")
+@RequestMapping("/api/v2/me/sync")
 public class CoreSyncController {
     private static final Set<String> TYPES = Set.of(
         "task", "task_record", "habit", "habit_record", "category",
-        "diary", "mood_custom"
+        "diary", "mood_custom", "private_blob"
     );
-    private static final Set<String> PRIVATE_TYPES = Set.of("diary", "mood_custom");
+    // V1 types remain readable from historical rows, but V2 writes use only
+    // the opaque generic type so the server cannot distinguish diary/mood.
+    private static final Set<String> PRIVATE_TYPES = Set.of("diary", "mood_custom", "private_blob");
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final SyncEntitlementService entitlement;
@@ -92,10 +94,10 @@ public class CoreSyncController {
         validate(request);
         if (PRIVATE_TYPES.contains(request.type())) {
             Integer configured = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM user_sync_crypto_config WHERE user_id=?", Integer.class, userId);
+                "SELECT COUNT(*) FROM user_opaque_credential WHERE user_id=?", Integer.class, userId);
             if (configured == null || configured == 0) {
                 throw new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED,
-                    "请先配置私密同步恢复口令");
+                    "请先完成 OPAQUE V2 账号密钥初始化");
             }
         }
         // Lock the account's stream before reading the record: guarantees cursor order
@@ -162,13 +164,19 @@ public class CoreSyncController {
                 r.payload().toString().getBytes(StandardCharsets.UTF_8).length > 65536) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"记录内容无效或超过64KiB");
             }
-            if (PRIVATE_TYPES.contains(r.type()) &&
-                (!"aes-256-gcm".equals(r.payload().path("alg").asText()) ||
-                 r.payload().path("keyVersion").asInt() != 1 ||
-                 !base64Size(r.payload().path("ciphertext").asText(), 1, 65536) ||
-                 !base64Size(r.payload().path("nonce").asText(), 12, 12) ||
-                 !base64Size(r.payload().path("tag").asText(), 16, 16))) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"敏感数据必须使用客户端加密信封");
+            if (PRIVATE_TYPES.contains(r.type())) {
+                Set<String> envelopeFields = Set.of("alg", "keyVersion", "nonce", "ciphertext", "tag");
+                java.util.Set<String> actualFields = new java.util.HashSet<>();
+                r.payload().fieldNames().forEachRemaining(actualFields::add);
+                if (!actualFields.equals(envelopeFields) ||
+                    !"aes-256-gcm".equals(r.payload().path("alg").asText()) ||
+                    r.payload().path("keyVersion").asInt() != 2 ||
+                    !base64Size(r.payload().path("ciphertext").asText(), 1, 65536) ||
+                    !base64Size(r.payload().path("nonce").asText(), 12, 12) ||
+                    !base64Size(r.payload().path("tag").asText(), 16, 16)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "敏感数据必须使用仅包含密文的 V2 客户端加密信封");
+                }
             }
         }
     }

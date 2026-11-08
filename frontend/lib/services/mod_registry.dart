@@ -15,25 +15,23 @@ class ModRegistry {
   static const maxMods = 30;
   static const maxManifestBytes = 64 * 1024;
 
-  Map<String, dynamic>? _cached;
-
   Future<Map<String, dynamic>> _read() async {
-    if (_cached != null) return _cached!;
     final raw = await repository.getAppSetting(storageKey);
     if (raw == null) {
-      return _cached = {'formatVersion': 1, 'mods': <dynamic>[], 'audit': <dynamic>[]};
+      return {'formatVersion': 1, 'mods': <dynamic>[], 'audit': <dynamic>[]};
     }
     final decoded = jsonDecode(raw);
-    if (decoded is! Map || decoded['formatVersion'] != 1 ||
-        decoded['mods'] is! List || decoded['audit'] is! List) {
+    if (decoded is! Map ||
+        decoded['formatVersion'] != 1 ||
+        decoded['mods'] is! List ||
+        decoded['audit'] is! List) {
       throw const FormatException('本地 Mod 注册表版本不受支持');
     }
-    return _cached = Map<String, dynamic>.from(decoded);
+    return Map<String, dynamic>.from(decoded);
   }
 
   Future<void> _write(Map<String, dynamic> next) async {
     await repository.setAppSetting(storageKey, jsonEncode(next));
-    _cached = next;
   }
 
   Future<List<Map<String, dynamic>>> list() async {
@@ -58,8 +56,17 @@ class ModRegistry {
     final value = jsonDecode(raw);
     if (value is! Map) throw const FormatException('清单必须是 JSON 对象');
     final manifest = Map<String, dynamic>.from(value);
-    const keys = {'schemaVersion', 'id', 'name', 'version', 'description',
-      'permissions', 'dependencies', 'taskTemplates', 'minHostVersion'};
+    const keys = {
+      'schemaVersion',
+      'id',
+      'name',
+      'version',
+      'description',
+      'permissions',
+      'dependencies',
+      'taskTemplates',
+      'minHostVersion',
+    };
     if (manifest.keys.any((k) => !keys.contains(k))) {
       throw const FormatException('存在未知字段或不受支持的扩展能力');
     }
@@ -88,7 +95,9 @@ class ModRegistry {
         throw const FormatException('minHostVersion 必须为 x.y.z，且每段最多 6 位');
       }
       if (_compareVersions(hostVersion, minHostVersion) < 0) {
-        throw FormatException('此 Mod 需要应用版本 $minHostVersion 或更高，当前为 $hostVersion');
+        throw FormatException(
+          '此 Mod 需要应用版本 $minHostVersion 或更高，当前为 $hostVersion',
+        );
       }
     }
     final description = manifest['description'] ?? '';
@@ -98,14 +107,20 @@ class ModRegistry {
     final perms = manifest['permissions'] ?? <dynamic>[];
     final deps = manifest['dependencies'] ?? <dynamic>[];
     final templates = manifest['taskTemplates'] ?? <dynamic>[];
-    if (perms is! List || perms.length > 10 ||
+    if (perms is! List ||
+        perms.length > 10 ||
         perms.any((p) => p is! String || !allowedPermissions.contains(p)) ||
         perms.toSet().length != perms.length) {
       throw const FormatException('包含不支持或重复的权限');
     }
-    if (deps is! List || deps.length > 10 ||
-        deps.any((d) => d is! String || d == id ||
-          !RegExp(r'^[a-z][a-z0-9]*(\.[a-z][a-z0-9-]*)+$').hasMatch(d)) ||
+    if (deps is! List ||
+        deps.length > 10 ||
+        deps.any(
+          (d) =>
+              d is! String ||
+              d == id ||
+              !RegExp(r'^[a-z][a-z0-9]*(\.[a-z][a-z0-9-]*)+$').hasMatch(d),
+        ) ||
         deps.toSet().length != deps.length) {
       throw const FormatException('依赖必须是其他 Mod 的 ID，不得重复');
     }
@@ -119,7 +134,15 @@ class ModRegistry {
     for (final rawTemplate in templates) {
       if (rawTemplate is! Map) throw const FormatException('模板应为对象');
       final item = Map<String, dynamic>.from(rawTemplate);
-      if (item.keys.any((k) => !{'title', 'note', 'targetCount', 'importance', 'difficulty'}.contains(k))) {
+      if (item.keys.any(
+        (k) => !{
+          'title',
+          'note',
+          'targetCount',
+          'importance',
+          'difficulty',
+        }.contains(k),
+      )) {
         throw const FormatException('任务模板存在未知字段');
       }
       final title = item['title'];
@@ -127,20 +150,41 @@ class ModRegistry {
       final target = item['targetCount'] ?? 1;
       final importance = item['importance'] ?? 3;
       final difficulty = item['difficulty'] ?? 3;
-      if (title is! String || title.trim().isEmpty || title.length > 100 ||
-          note is! String || note.length > 500 || target is! int || target < 1 || target > 999 ||
-          importance is! int || importance < 1 || importance > 5 ||
-          difficulty is! int || difficulty < 1 || difficulty > 5) {
+      if (title is! String ||
+          title.trim().isEmpty ||
+          title.length > 100 ||
+          note is! String ||
+          note.length > 500 ||
+          target is! int ||
+          target < 1 ||
+          target > 999 ||
+          importance is! int ||
+          importance < 1 ||
+          importance > 5 ||
+          difficulty is! int ||
+          difficulty < 1 ||
+          difficulty > 5) {
         throw const FormatException('任务模板参数不合法');
       }
-      cleanTemplates.add({'title': title.trim(), 'note': note, 'targetCount': target,
-        'importance': importance, 'difficulty': difficulty});
+      cleanTemplates.add({
+        'title': title.trim(),
+        'note': note,
+        'targetCount': target,
+        'importance': importance,
+        'difficulty': difficulty,
+      });
     }
-    return {'schemaVersion': 1, 'id': id, 'name': name.trim(), 'version': version,
+    return {
+      'schemaVersion': 1,
+      'id': id,
+      'name': name.trim(),
+      'version': version,
       'description': description,
       if (minHostVersion != null) 'minHostVersion': minHostVersion,
       'permissions': List<String>.from(perms),
-      'dependencies': List<String>.from(deps), 'taskTemplates': cleanTemplates};
+      'dependencies': List<String>.from(deps),
+      'taskTemplates': cleanTemplates,
+    };
   }
 
   static int _compareVersions(String x, String y) {
@@ -155,11 +199,18 @@ class ModRegistry {
 
   void _log(Map<String, dynamic> store, String action, String id) {
     final events = List<dynamic>.from(store['audit'] as List);
-    events.insert(0, {'at': DateTime.now().toIso8601String(), 'action': action, 'id': id});
+    events.insert(0, {
+      'at': DateTime.now().toIso8601String(),
+      'action': action,
+      'id': id,
+    });
     store['audit'] = events.take(100).toList();
   }
 
-  Future<void> install(String raw, {required Set<String> grantedPermissions}) async {
+  Future<void> install(
+    String raw, {
+    required Set<String> grantedPermissions,
+  }) async {
     final manifest = parseManifest(raw);
     final declared = (manifest['permissions'] as List).cast<String>().toSet();
     if (!declared.containsAll(grantedPermissions)) {
@@ -168,9 +219,14 @@ class ModRegistry {
     final old = await list();
     final id = manifest['id'] as String;
     final current = old.where((m) => m['id'] == id).toList();
-    if (current.isEmpty && old.length >= maxMods) throw const FormatException('最多安装 30 个 Mod');
+    if (current.isEmpty && old.length >= maxMods)
+      throw const FormatException('最多安装 30 个 Mod');
     if (current.isNotEmpty &&
-        _compareVersions(manifest['version'] as String, current.first['version'] as String) <= 0) {
+        _compareVersions(
+              manifest['version'] as String,
+              current.first['version'] as String,
+            ) <=
+            0) {
       throw const FormatException('升级版本必须高于当前已安装版本');
     }
     for (final dep in (manifest['dependencies'] as List).cast<String>()) {
@@ -183,7 +239,8 @@ class ModRegistry {
     final retainedGrants = grantedPermissions.intersection(declared);
     // Reject an upgrade that would introduce a dependency cycle.
     final graph = <String, List<String>>{
-      for (final m in old) m['id'] as String: (m['dependencies'] as List).cast<String>(),
+      for (final m in old)
+        m['id'] as String: (m['dependencies'] as List).cast<String>(),
       id: (manifest['dependencies'] as List).cast<String>(),
     };
     bool reaches(String start, String target, Set<String> seen) {
@@ -194,14 +251,18 @@ class ModRegistry {
       }
       return false;
     }
+
     for (final dep in graph[id]!) {
       if (reaches(dep, id, <String>{})) {
         throw const FormatException('依赖关系形成循环');
       }
     }
-    final record = {...manifest, 'enabled': current.isEmpty ? true : current.first['enabled'],
+    final record = {
+      ...manifest,
+      'enabled': current.isEmpty ? true : current.first['enabled'],
       'grantedPermissions': retainedGrants.toList()..sort(),
-      'installedAt': DateTime.now().toIso8601String()};
+      'installedAt': DateTime.now().toIso8601String(),
+    };
     final next = Map<String, dynamic>.from(await _read());
     next['mods'] = [...old.where((m) => m['id'] != id), record];
     _log(next, current.isEmpty ? 'install' : 'upgrade', id);
@@ -212,8 +273,13 @@ class ModRegistry {
     final mods = await list();
     final index = mods.indexWhere((m) => m['id'] == id);
     if (index == -1) throw StateError('Mod 未安装');
-    if (!enabled && mods.any((m) => m['enabled'] == true && m['id'] != id &&
-        (m['dependencies'] as List).contains(id))) {
+    if (!enabled &&
+        mods.any(
+          (m) =>
+              m['enabled'] == true &&
+              m['id'] != id &&
+              (m['dependencies'] as List).contains(id),
+        )) {
       throw StateError('其他已启用 Mod 依赖此 Mod，不能禁用');
     }
     if (enabled) {
@@ -233,7 +299,9 @@ class ModRegistry {
   Future<void> uninstall(String id) async {
     final mods = await list();
     if (!mods.any((m) => m['id'] == id)) throw StateError('Mod 未安装');
-    if (mods.any((m) => m['id'] != id && (m['dependencies'] as List).contains(id))) {
+    if (mods.any(
+      (m) => m['id'] != id && (m['dependencies'] as List).contains(id),
+    )) {
       throw StateError('仍有 Mod 依赖此 Mod，不能卸载');
     }
     final next = Map<String, dynamic>.from(await _read());
@@ -246,10 +314,15 @@ class ModRegistry {
     final result = <Map<String, dynamic>>[];
     for (final mod in await list()) {
       if (mod['enabled'] != true ||
-          !(mod['grantedPermissions'] as List).contains('tasks.create')) continue;
+          !(mod['grantedPermissions'] as List).contains('tasks.create')) {
+        continue;
+      }
       for (final template in mod['taskTemplates'] as List) {
-        result.add({...Map<String, dynamic>.from(template as Map),
-          'modId': mod['id'], 'modName': mod['name']});
+        result.add({
+          ...Map<String, dynamic>.from(template as Map),
+          'modId': mod['id'],
+          'modName': mod['name'],
+        });
       }
     }
     return result;

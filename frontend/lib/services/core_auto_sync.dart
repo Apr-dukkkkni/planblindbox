@@ -45,7 +45,11 @@ class CoreAutoSync extends ChangeNotifier {
     if (_userId == nextId && _token == nextToken && _baseUrl == baseUrl) return;
     _epoch++;
     _paused = false;
-    PrivateSyncVault.instance.lock();
+    // Keep a freshly OPAQUE-unwrapped AMK for this same account. On account
+    // switches or logout, discard the previous in-memory key before restoring.
+    if (nextId == null || !PrivateSyncVault.instance.unlocked(nextId)) {
+      PrivateSyncVault.instance.lock();
+    }
     _timer?.cancel();
     _timer = null;
     _client?.dispose();
@@ -85,7 +89,9 @@ class CoreAutoSync extends ChangeNotifier {
       CoreSyncStore store, String token, int epoch) async {
     try {
       final result = await client.mutate(token,
-        operationId: mutation.operationId, type: mutation.type,
+        operationId: mutation.operationId,
+        type: (mutation.type == 'diary' || mutation.type == 'mood_custom')
+            ? 'private_blob' : mutation.type,
         id: mutation.uuid, expectedRevision: mutation.expectedRevision,
         deleted: mutation.deleted,
         payload: mutation.payloadJson == null ? null :
@@ -142,7 +148,7 @@ class CoreAutoSync extends ChangeNotifier {
       _active = entitlement['active'] == true;
       if (!PrivateSyncVault.instance.unlocked(store.userId)) {
         try {
-          await PrivateSyncVault.instance.tryRestore(store.userId, token, client);
+          await PrivateSyncVault.instance.tryRestore(store.userId);
         } catch (_) { // Private key recovery is optional; task sync must work.
         }
       }
@@ -177,7 +183,7 @@ class CoreAutoSync extends ChangeNotifier {
       _pending = await store.pendingCount();
       _conflicts = (await store.conflicts()).length;
       final privateHint = PrivateSyncVault.instance.unlocked(store.userId)
-          ? ' · 私密记录已加密同步' : ' · 私密记录待口令解锁';
+          ? ' · 私密记录已加密同步' : ' · 私密记录等待账号密钥恢复';
       _message = !_active
           ? '订阅未生效：本地数据正常，云端已有数据仍可下载'
           : _conflicts > 0

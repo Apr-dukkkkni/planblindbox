@@ -1,53 +1,100 @@
 package com.planblindbox.mod.auth;
 
 import jakarta.servlet.DispatcherType;
-import java.util.Map;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.AuthenticationEntryPoint;
-import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.web.cors.CorsConfigurationSource;
+
 import static org.springframework.security.config.Customizer.withDefaults;
 
-@Configuration @EnableWebSecurity
+@Configuration
+@EnableWebSecurity
 public class SecurityConfig {
-    @Bean PasswordEncoder passwordEncoder(){return new BCryptPasswordEncoder(12);}
-    // Existing administrator authorization stays in ModAdminController.authorize().
-    @Bean @Order(1) SecurityFilterChain adminChain(HttpSecurity http) throws Exception {
-        return http.securityMatcher("/api/v1/admin/**").csrf(c->c.disable()).cors(withDefaults())
-                .sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(a->a.anyRequest().permitAll()).build();
+
+    @Bean
+    PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(12);
     }
-    @Bean @Order(2) SecurityFilterChain userChain(HttpSecurity http) throws Exception {
-        http.csrf(c->c.disable()).cors(withDefaults()).httpBasic(c->c.disable()).formLogin(c->c.disable())
-            .sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .exceptionHandling(e->e.authenticationEntryPoint((req,res,ex)->{
-                res.setStatus(401);res.setContentType("application/json;charset=UTF-8");
-                res.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"请先登录\"}");
-            }).accessDeniedHandler((req,res,ex)->{
-                res.setStatus(403);res.setContentType("application/json;charset=UTF-8");
-                res.getWriter().write("{\"code\":\"FORBIDDEN\",\"message\":\"权限不足\"}");
-            }))
-            .authorizeHttpRequests(a->a
-               .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
-               .requestMatchers(HttpMethod.OPTIONS,"/**").permitAll()
-               .requestMatchers(HttpMethod.POST,"/api/v1/auth/register","/api/v1/auth/login",
-                       "/api/v1/auth/password/forgot","/api/v1/auth/password/reset").permitAll()
-               .requestMatchers(HttpMethod.GET,"/api/v1/avatars/**").permitAll()
-               .requestMatchers(HttpMethod.POST,"/api/v1/mods/*/versions/*/download").authenticated()
-               .requestMatchers(HttpMethod.GET,"/api/v1/mods/*/versions/*/manifest").authenticated()
-               .requestMatchers(HttpMethod.GET,"/api/v1/mods","/api/v1/mods/ranking","/api/v1/mods/*").permitAll()
-               .requestMatchers("/api/v1/me","/api/v1/me/**","/api/v1/auth/logout").authenticated()
-               .anyRequest().denyAll())
-            .oauth2ResourceServer(o->o.jwt(withDefaults()));
+
+    // Admin authorization remains enforced by ModAdminController.authorize().
+    @Bean
+    @Order(1)
+    SecurityFilterChain adminChain(
+            HttpSecurity http,
+            CorsConfigurationSource corsConfigurationSource) throws Exception {
+
+        return http.securityMatcher("/api/v1/admin/**")
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .build();
+    }
+
+    @Bean
+    @Order(2)
+    SecurityFilterChain userChain(
+            HttpSecurity http,
+            CorsConfigurationSource corsConfigurationSource) throws Exception {
+
+        http.cors(cors -> cors.configurationSource(corsConfigurationSource))
+                .csrf(csrf -> csrf.disable())
+                .httpBasic(basic -> basic.disable())
+                .formLogin(form -> form.disable())
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .exceptionHandling(exception -> exception
+                        .authenticationEntryPoint((request, response, ex) -> {
+                            response.setStatus(401);
+                            response.setContentType("application/json;charset=UTF-8");
+                            response.getWriter().write(
+                                    "{\"code\":\"UNAUTHORIZED\",\"message\":\"请先登录\"}");
+                        })
+                        .accessDeniedHandler((request, response, ex) -> {
+                            response.setStatus(403);
+                            response.setContentType("application/json;charset=UTF-8");
+                            response.getWriter().write(
+                                    "{\"code\":\"FORBIDDEN\",\"message\":\"权限不足\"}");
+                        }))
+                .authorizeHttpRequests(auth -> auth
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v2/auth/register/start",
+                                "/api/v2/auth/register/finish",
+                                "/api/v2/auth/login/start",
+                                "/api/v2/auth/login/finish").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v1/auth/register",
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/password/forgot",
+                                "/api/v1/auth/password/reset").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/avatars/**").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v1/mods/*/versions/*/download").authenticated()
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/v1/mods/*/versions/*/manifest").authenticated()
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/v1/mods",
+                                "/api/v1/mods/ranking",
+                                "/api/v1/mods/*").permitAll()
+                        .requestMatchers(
+                                "/api/v1/me",
+                                "/api/v1/me/**",
+                                "/api/v1/auth/logout",
+                                "/api/v2/me/**",
+                                "/api/v2/auth/credential/change/**").authenticated()
+                        .anyRequest().denyAll())
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(withDefaults()));
         return http.build();
     }
 }

@@ -5,6 +5,15 @@ import 'package:http/http.dart' as http;
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/testing.dart';
 import 'package:plan_blind_box/data/mod_market_api.dart';
+import 'package:plan_blind_box/auth/auth_api.dart';
+import 'package:plan_blind_box/auth/auth_session.dart';
+
+class _TestAuthSession extends AuthSession {
+  _TestAuthSession() : super(AuthApi(baseUrl: 'https://example.test'));
+
+  @override
+  String? get token => 'testing-token';
+}
 
 void main() {
   test('在线市场只查询 Mod 元数据并解析响应', () async {
@@ -24,16 +33,19 @@ void main() {
   test('下载清单使用请求唯一键且仅解析为文本', () async {
     final client = MockClient((request) async {
       expect(request.method, 'POST');
+      expect(request.headers['Authorization'], 'Bearer testing-token');
       expect(request.url.path, '/api/v1/mods/com.example.reading/versions/1.0.0/download');
       expect(jsonDecode(request.body)['requestId'], '123e4567-e89b-42d3-a456-426614174000');
       final raw = '{"schemaVersion":1}';
       return http.Response(jsonEncode({'manifest': raw, 'manifestSha256': crypto.sha256.convert(utf8.encode(raw)).toString(), 'counted': true}), 200);
     });
-    final api = ModMarketApi(client: client);
+    final session = _TestAuthSession();
+    final api = ModMarketApi(session: session, client: client);
     final raw = await api.download('com.example.reading', '1.0.0',
       requestId: '123e4567-e89b-42d3-a456-426614174000');
     expect(raw, '{"schemaVersion":1}');
     api.dispose();
+    session.dispose();
   });
 
   test('拒绝损坏清单和缺失摘要的响应', () async {
@@ -43,9 +55,11 @@ void main() {
     ];
     var index = 0;
     final client = MockClient((request) async => http.Response(jsonEncode(responses[index++]), 200));
-    final api = ModMarketApi(client: client);
+    final session = _TestAuthSession();
+    final api = ModMarketApi(session: session, client: client);
     await expectLater(api.download('com.example.reading', '1.0.0'), throwsFormatException);
     await expectLater(api.download('com.example.reading', '1.0.0'), throwsFormatException);
     api.dispose();
+    session.dispose();
   });
 }

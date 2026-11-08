@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'auth_api.dart';
+import '../services/private_sync_vault.dart';
 
 enum LoginState { loading, guest, signedIn, offline }
 
@@ -30,6 +31,16 @@ class AuthSession extends ChangeNotifier {
       user = await api.me(_accessToken!);
       _lastKnownUserId = user!.userId;
       await storage.write(key: 'pbb_last_user_id', value: '${user!.userId}');
+      final keyRestored = await PrivateSyncVault.instance
+          .tryRestore(-1000000 - user!.userId);
+      if (!keyRestored) {
+        // A valid bearer token without the device AMK is not enough to expose
+        // private records. Require a fresh OPAQUE login to unwrap the AMK.
+        await _clearLocal();
+        state = LoginState.guest;
+        notifyListeners();
+        return;
+      }
       state = LoginState.signedIn;
     } on AuthApiException catch (e) {
       if (e.statusCode == 401 || e.statusCode == 403) {
@@ -51,7 +62,32 @@ class AuthSession extends ChangeNotifier {
     _accessToken = data.accessToken;
     user = data.user;
     _lastKnownUserId = user!.userId;
+    await PrivateSyncVault.instance.activate(
+      -1000000 - user!.userId, data.accountMasterKey);
     await storage.write(key: 'pbb_last_user_id', value: '${user!.userId}');
+    state = LoginState.signedIn;
+    notifyListeners();
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final currentUser = user;
+    if (state != LoginState.signedIn || currentUser == null) {
+      throw const AuthApiException('请先登录');
+    }
+    final result = await api.changePassword(
+      email: currentUser.email,
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+    // The server increments credential_version and returns a replacement
+    // token. The AMK remains unchanged and the already-active local vault
+    // does not need to be reinitialized.
+    await storage.write(key: 'pbb_access_token', value: result.accessToken);
+    _accessToken = result.accessToken;
+    _lastKnownUserId = currentUser.userId;
     state = LoginState.signedIn;
     notifyListeners();
   }
@@ -83,12 +119,17 @@ class AuthSession extends ChangeNotifier {
   /// localOnly is an explicit fallback; remote token might remain valid.
   Future<void> logout({bool localOnly = false}) async {
     if (!localOnly && _accessToken != null) await api.logout(_accessToken!);
+    final currentUserId = user?.userId ?? _lastKnownUserId;
+    if (currentUserId != null) {
+      await PrivateSyncVault.instance.forgetDeviceKey(-1000000 - currentUserId);
+    }
     await _clearLocal();
     state = LoginState.guest;
     notifyListeners();
   }
 
   Future<void> _clearLocal() async {
+    PrivateSyncVault.instance.lock();
     await storage.delete(key: 'pbb_access_token');
     await storage.delete(key: 'pbb_last_user_id');
     _lastKnownUserId = null;

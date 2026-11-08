@@ -10,6 +10,7 @@ import 'screens/app_shell.dart';
 import 'services/app_preferences.dart';
 import 'services/cloud_archive_service.dart';
 import 'services/core_auto_sync.dart';
+import 'services/opaque_client/opaque_client.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -100,6 +101,12 @@ class _PlanBlindBoxAppState extends State<PlanBlindBoxApp> with WidgetsBindingOb
       title: 'PlanBlindBox · 每天一点成长',
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
+      builder: (context, child) => Stack(
+        children: [
+          if (child != null) child,
+          Positioned(left: 0, top: 0, child: buildOpaqueRuntimeHost()),
+        ],
+      ),
       home: LayoutBuilder(
         builder: (context, constraints) {
           final isDesktop = constraints.maxWidth > 600;

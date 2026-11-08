@@ -1,10 +1,9 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-/// The transport protocol for server-side record sync.
-/// The local outbox, UUID migration and encrypted diary adapter are deliberately
-/// NOT enabled until their persistence and conflict-rescue tests are complete.
-/// Never call upload with a SQLite database snapshot.
+/// V2 transport protocol for server-side record sync. Private diary and mood
+/// records are already encrypted in PrivateVaultStore before entering the
+/// outbox. Never upload a SQLite database snapshot or private plaintext.
 class CoreSyncClient {
   CoreSyncClient({required String baseUrl, http.Client? client})
       : _baseUrl = baseUrl.replaceAll(RegExp(r'/+$'), ''),
@@ -15,7 +14,7 @@ class CoreSyncClient {
   final http.Client _client;
   final bool _ownsClient;
 
-  Uri _path(String path) => Uri.parse('$_baseUrl/api/v1/me/sync$path');
+  Uri _path(String path) => Uri.parse('$_baseUrl/api/v2/me/sync$path');
   Map<String, String> _headers(String token) => {
     'Authorization': 'Bearer $token',
     'Accept': 'application/json',
@@ -41,19 +40,6 @@ class CoreSyncClient {
     await _client.get(_path('/entitlement'), headers: _headers(token))
         .timeout(const Duration(seconds: 15)),
   );
-
-  Future<Map<String, dynamic>> cryptoConfig(String token) async => _read(
-    await _client.get(_path('/crypto'), headers: _headers(token))
-        .timeout(const Duration(seconds: 20)),
-  );
-
-  Future<Map<String, dynamic>> createCryptoConfig(String token, {
-    required String salt, required int iterations,
-    required Map<String, dynamic> verifier,
-  }) async => _read(await _client.put(_path('/crypto'),
-    headers: _headers(token),
-    body: jsonEncode({'salt': salt, 'iterations': iterations,
-      'verifier': verifier})).timeout(const Duration(seconds: 20)));
 
   /// Pull from a persisted per-account cursor. Apply changes to SQLite in a
   /// transaction before persisting the returned cursor; otherwise data can be lost.

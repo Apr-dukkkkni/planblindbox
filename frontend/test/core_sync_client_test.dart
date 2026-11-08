@@ -8,7 +8,7 @@ import 'package:plan_blind_box/services/core_sync_service.dart';
 void main() {
   test('上传时带登录令牌、幂等操作ID和记录版本', () async {
     final client = CoreSyncClient(baseUrl: 'https://example.test', client: MockClient((request) async {
-      expect(request.url.path, '/api/v1/me/sync/records');
+      expect(request.url.path, '/api/v2/me/sync/records');
       expect(request.method, 'PUT');
       expect(request.headers['Authorization'], 'Bearer testing-token');
       final body = jsonDecode(request.body) as Map<String, dynamic>;
@@ -28,7 +28,11 @@ void main() {
 
   test('409 版本冲突不被伪装成成功', () async {
     final client = CoreSyncClient(baseUrl: 'https://example.test', client: MockClient((_) async =>
-      http.Response('{"message":"记录版本冲突"}', 409)));
+      http.Response.bytes(
+        utf8.encode('{"message":"记录版本冲突"}'),
+        409,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      )));
     await expectLater(client.mutate('token',
       operationId: '123e4567-e89b-42d3-a456-426614174000',
       type: 'habit', id: '123e4567-e89b-42d3-a456-426614174001',

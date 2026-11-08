@@ -79,17 +79,25 @@ class _MyPageState extends State<MyPage> {
 
   Future<void> _loadServerWater(int sequence) async {
     final token = widget.auth.token;
-    setState(() { _serverWater = null; _waterMessage = null;
-      _waterLoading = token != null; });
+    setState(() {
+      _serverWater = null;
+      _waterMessage = null;
+      _waterLoading = token != null;
+    });
     if (token == null) {
-      if (mounted && sequence == _requestSequence) setState(() {
-        _waterMessage = '登录后领取水滴';
-      });
+      if (mounted && sequence == _requestSequence) {
+        setState(() {
+          _waterMessage = '登录后领取水滴';
+        });
+      }
       return;
     }
     try {
       final data = await widget.auth.api.getWaterStatus(token);
-      if (!mounted || sequence != _requestSequence || widget.auth.token != token) return;
+      if (!mounted ||
+          sequence != _requestSequence ||
+          widget.auth.token != token)
+        return;
       setState(() => _serverWater = (data['waterBalance'] as num).toInt());
     } catch (_) {
       if (!mounted || sequence != _requestSequence) return;
@@ -103,13 +111,13 @@ class _MyPageState extends State<MyPage> {
 
   Future<void> _openAccount() async {
     if (!widget.auth.isSignedIn) {
-      await Navigator.of(context).push<bool>(MaterialPageRoute(
-        builder: (_) => LoginPage(session: widget.auth),
-      ));
+      await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => LoginPage(session: widget.auth)),
+      );
     } else {
-      await Navigator.of(context).push<void>(MaterialPageRoute(
-        builder: (_) => ProfilePage(session: widget.auth),
-      ));
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(builder: (_) => ProfilePage(session: widget.auth)),
+      );
     }
     if (mounted) setState(() {});
   }
@@ -119,9 +127,12 @@ class _MyPageState extends State<MyPage> {
       await _openAccount();
       if (!mounted || !widget.auth.isSignedIn) return;
     }
-    await Navigator.of(context).push<void>(MaterialPageRoute(
-      builder: (_) => UserCloudProgressPage(api: widget.api, auth: widget.auth),
-    ));
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) =>
+            UserCloudProgressPage(api: widget.api, auth: widget.auth),
+      ),
+    );
     if (mounted) _load();
   }
 
@@ -182,7 +193,9 @@ class _MyPageState extends State<MyPage> {
                 Expanded(
                   child: _assetCard(
                     title: '水滴',
-                    value: _waterLoading ? '…' : (_serverWater?.toString() ?? '—'),
+                    value: _waterLoading
+                        ? '…'
+                        : (_serverWater?.toString() ?? '—'),
                     icon: Icons.water_drop_outlined,
                     color: const Color(0xFF528DB7),
                   ),
@@ -190,8 +203,10 @@ class _MyPageState extends State<MyPage> {
               ],
             ),
             const SizedBox(height: 7),
-            Text(_waterMessage ?? '水滴余额由服务器管理，本地不发放水滴',
-              style: const TextStyle(fontSize: 11, color: _muted)),
+            Text(
+              _waterMessage ?? '水滴余额由服务器管理，本地不发放水滴',
+              style: const TextStyle(fontSize: 11, color: _muted),
+            ),
             if (_loading && _data != null) ...[
               const SizedBox(height: 10),
               const LinearProgressIndicator(minHeight: 2),
@@ -282,97 +297,105 @@ class _MyPageState extends State<MyPage> {
   }
 
   Widget _profileCard() {
-    final avatarUrl = widget.auth.api.absoluteAvatarUrl(widget.auth.user?.avatar);
+    final avatarUrl = widget.auth.api.absoluteAvatarUrl(
+      widget.auth.user?.avatar,
+    );
     return Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(22),
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF315C48), Color(0xFF527C63)],
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF315C48), Color(0xFF527C63)],
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x18315C48),
+            blurRadius: 16,
+            offset: Offset(0, 7),
           ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x18315C48),
-              blurRadius: 16,
-              offset: Offset(0, 7),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 58,
-              height: 58,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(19),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
-                image: avatarUrl == null ? null : DecorationImage(
-                    image: NetworkImage(avatarUrl), fit: BoxFit.cover),
-              ),
-              child: avatarUrl == null ? const Icon(
-                Icons.person_outline_rounded,
-                size: 32,
-                color: Colors.white,
-              ) : null,
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.auth.isSignedIn
-                        ? widget.auth.user?.username ?? '我的成长档案'
-                        : '我的成长档案',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 19,
-                      fontWeight: FontWeight.w800,
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(19),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+              image: avatarUrl == null
+                  ? null
+                  : DecorationImage(
+                      image: NetworkImage(avatarUrl),
+                      fit: BoxFit.cover,
                     ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    widget.auth.isSignedIn
-                        ? widget.auth.user?.email ?? ''
-                        : '游客模式 · 计划保存在本机',
-                    style: const TextStyle(
-                      color: Color(0xFFE1EBE3),
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
             ),
-            const Icon(Icons.chevron_right, color: Colors.white),
-          ],
-        ),
-      );
+            child: avatarUrl == null
+                ? const Icon(
+                    Icons.person_outline_rounded,
+                    size: 32,
+                    color: Colors.white,
+                  )
+                : null,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.auth.isSignedIn
+                      ? widget.auth.user?.username ?? '我的成长档案'
+                      : '我的成长档案',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  widget.auth.isSignedIn
+                      ? widget.auth.user?.email ?? ''
+                      : '游客模式 · 计划保存在本机',
+                  style: const TextStyle(
+                    color: Color(0xFFE1EBE3),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right, color: Colors.white),
+        ],
+      ),
+    );
   }
 
   Widget _sectionTitle(String title, String subtitle) => Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFF26392E),
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          Flexible(
-            child: Text(
-              subtitle,
-              textAlign: TextAlign.right,
-              style: const TextStyle(color: _muted, fontSize: 11),
-            ),
-          ),
-        ],
-      );
+    crossAxisAlignment: CrossAxisAlignment.end,
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(
+        title,
+        style: const TextStyle(
+          color: Color(0xFF26392E),
+          fontSize: 17,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      Flexible(
+        child: Text(
+          subtitle,
+          textAlign: TextAlign.right,
+          style: const TextStyle(color: _muted, fontSize: 11),
+        ),
+      ),
+    ],
+  );
 
   Widget _assetCard({
     required String title,
@@ -380,90 +403,92 @@ class _MyPageState extends State<MyPage> {
     required IconData icon,
     required Color color,
   }) => Container(
-        padding: const EdgeInsets.fromLTRB(10, 13, 10, 13),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(17),
-          border: Border.all(color: _border),
+    padding: const EdgeInsets.fromLTRB(10, 13, 10, 13),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(17),
+      border: Border.all(color: _border),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: color, size: 21),
+        const SizedBox(height: 9),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Color(0xFF26392E),
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: color, size: 21),
-            const SizedBox(height: 9),
-            Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFF26392E),
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(title, style: const TextStyle(color: _muted, fontSize: 11)),
-          ],
-        ),
-      );
+        const SizedBox(height: 3),
+        Text(title, style: const TextStyle(color: _muted, fontSize: 11)),
+      ],
+    ),
+  );
 
   Widget _growthCard(int? exp) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF0ECF8),
-          borderRadius: BorderRadius.circular(19),
-          border: Border.all(color: const Color(0xFFE3DCF0)),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF0ECF8),
+      borderRadius: BorderRadius.circular(19),
+      border: Border.all(color: const Color(0xFFE3DCF0)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: const Color(0xFF8974B5).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Icon(
+            Icons.auto_awesome_rounded,
+            color: Color(0xFF8974B5),
+          ),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: const Color(0xFF8974B5).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '成长等级',
+                style: TextStyle(
+                  color: Color(0xFF3D3158),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
-              child: const Icon(Icons.auto_awesome_rounded,
-                  color: Color(0xFF8974B5)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '成长等级',
-                    style: TextStyle(
-                      color: Color(0xFF3D3158),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    '当前累计经验：${exp ?? '—'} EXP',
-                    style: const TextStyle(
-                      color: Color(0xFF625579),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  const Text(
-                    '等级与盲盒解锁规则将在成长系统阶段接入，当前不显示虚构等级。',
-                    style: TextStyle(
-                      color: Color(0xFF756A89),
-                      fontSize: 11,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 5),
+              Text(
+                '当前累计经验：${exp ?? '—'} EXP',
+                style: const TextStyle(
+                  color: Color(0xFF625579),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 5),
+              const Text(
+                '等级与盲盒解锁规则将在成长系统阶段接入，当前不显示虚构等级。',
+                style: TextStyle(
+                  color: Color(0xFF756A89),
+                  fontSize: 11,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
         ),
-      );
+      ],
+    ),
+  );
 
   Widget _menuCard({
     required IconData icon,
@@ -473,72 +498,72 @@ class _MyPageState extends State<MyPage> {
     required String trailingLabel,
     required VoidCallback? onTap,
   }) => Material(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(17),
-        child: InkWell(
-          onTap: onTap,
+    color: Colors.white,
+    borderRadius: BorderRadius.circular(17),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(17),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+        decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(17),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(17),
-              border: Border.all(color: _border),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: iconColor.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(icon, color: iconColor, size: 22),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          color: Color(0xFF26392E),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(color: _muted, fontSize: 11),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  trailingLabel,
-                  style: TextStyle(
-                    color: onTap == null ? _muted : _forest,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Icon(Icons.chevron_right_rounded,
-                    color: onTap == null ? const Color(0xFFC4CBC5) : _muted),
-              ],
-            ),
-          ),
+          border: Border.all(color: _border),
         ),
-      );
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: iconColor, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Color(0xFF26392E),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: _muted, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              trailingLabel,
+              style: TextStyle(
+                color: onTap == null ? _muted : _forest,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: onTap == null ? const Color(0xFFC4CBC5) : _muted,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   void _openCollectionPreview() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => CollectionPage(api: widget.api),
-      ),
+      MaterialPageRoute<void>(builder: (_) => CollectionPage(api: widget.api)),
     );
   }
 

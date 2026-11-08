@@ -1,16 +1,16 @@
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
-import 'package:sqflite_common/sqlite_api.dart' show DatabaseFactory, DatabaseExecutor;
 import 'sqflite_web_factory_stub.dart'
-    if (dart.library.js_interop) 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart' as ffi_web;
+    if (dart.library.js_interop) 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart'
+    as ffi_web;
 
 /// PlanBlindBox 本地数据库入口。
 /// Android/iOS 使用 sqflite；Flutter Web 使用 SQLite WASM + IndexedDB。
 class LocalDatabase {
   LocalDatabase._({DatabaseFactory? testFactory, String? testPath})
-      : _testFactory = testFactory,
-        _testPath = testPath;
+    : _testFactory = testFactory,
+      _testPath = testPath;
 
   static final LocalDatabase instance = LocalDatabase._();
 
@@ -18,8 +18,7 @@ class LocalDatabase {
   factory LocalDatabase.forTesting({
     required DatabaseFactory factory,
     String path = ':memory:',
-  }) =>
-      LocalDatabase._(testFactory: factory, testPath: path);
+  }) => LocalDatabase._(testFactory: factory, testPath: path);
 
   final DatabaseFactory? _testFactory;
   final String? _testPath;
@@ -33,7 +32,9 @@ class LocalDatabase {
     final db = await database;
     return {
       'engine': kIsWeb ? 'SQLite WASM + IndexedDB' : 'SQLite（sqflite）',
-      'location': kIsWeb ? '浏览器当前站点的 IndexedDB 本地存储' : (_openedPath ?? '本机应用数据库目录'),
+      'location': kIsWeb
+          ? '浏览器当前站点的 IndexedDB 本地存储'
+          : (_openedPath ?? '本机应用数据库目录'),
       'databaseName': p.basename(_openedPath ?? 'plan_blind_box_v1.db'),
       'schemaVersion': await db.getVersion(),
       'platform': kIsWeb ? 'Web' : 'Native',
@@ -49,7 +50,7 @@ class LocalDatabase {
     final String path;
 
     if (_testFactory != null) {
-      factory = _testFactory!;
+      factory = _testFactory;
       path = _testPath ?? ':memory:';
     } else if (kIsWeb) {
       final webFactory = ffi_web.databaseFactoryFfiWeb;
@@ -68,13 +69,14 @@ class LocalDatabase {
     return factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 7,
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) await _createCustomShopSchema(db);
           if (oldVersion < 3) await _upgradeProductCategories(db);
           if (oldVersion < 4) await _createWellbeingSchema(db);
           if (oldVersion < 5) await _createCoreSyncSchema(db);
           if (oldVersion < 6) await _createPrivateSyncSchema(db);
+          if (oldVersion < 7) await _createPrivateVaultSchema(db);
         },
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
@@ -334,12 +336,14 @@ class LocalDatabase {
     await _createWellbeingSchema(db);
     await _createCoreSyncSchema(db);
     await _createPrivateSyncSchema(db);
+    await _createPrivateVaultSchema(db);
   }
 
   /// 仅新增同步元数据，绝不覆盖已有任务或习惯。
   /// 本地变更与业务写入共享 SQLite 事务，断网也保留待同步标记。
   Future<void> _createCoreSyncSchema(DatabaseExecutor db) async {
-    const uuidSql = "lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || "
+    const uuidSql =
+        "lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || "
         "'-4' || substr(hex(randomblob(2)),2) || '-a' || "
         "substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6)))";
     for (final table in const ['tasks', 'habits']) {
@@ -347,15 +351,21 @@ class LocalDatabase {
       if (!cols.any((row) => row['name'] == 'sync_uuid')) {
         await db.execute('ALTER TABLE $table ADD COLUMN sync_uuid TEXT');
       }
-      await db.execute('UPDATE $table SET sync_uuid=$uuidSql '
-          "WHERE sync_uuid IS NULL OR sync_uuid=''");
-      await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_${table}_sync_uuid '
-          'ON $table(sync_uuid)');
+      await db.execute(
+        'UPDATE $table SET sync_uuid=$uuidSql '
+        "WHERE sync_uuid IS NULL OR sync_uuid=''",
+      );
+      await db.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_${table}_sync_uuid '
+        'ON $table(sync_uuid)',
+      );
     }
     await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_runtime (
       id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 1
     )''');
-    await db.execute('INSERT OR IGNORE INTO core_sync_runtime(id,enabled) VALUES(1,1)');
+    await db.execute(
+      'INSERT OR IGNORE INTO core_sync_runtime(id,enabled) VALUES(1,1)',
+    );
     await db.execute('''CREATE TABLE IF NOT EXISTS core_sync_dirty (
       user_id INTEGER NOT NULL,
       record_type TEXT NOT NULL,
@@ -407,38 +417,48 @@ class LocalDatabase {
       final table = entity == 'task' ? 'tasks' : 'habits';
       final pk = entity == 'task' ? 'task_id' : 'habit_id';
       final guard = '(SELECT enabled FROM core_sync_runtime WHERE id=1)=1';
-      final upd = '''INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
+      final upd =
+          '''INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
         VALUES(NEW.user_id,'$entity',(SELECT sync_uuid FROM $table WHERE $pk=NEW.$pk),NEW.$pk,0)
         ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
           local_id=excluded.local_id,deleted=0,generation=generation+1;''';
-      await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_insert
+      await db.execute(
+        '''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_insert
         AFTER INSERT ON $table WHEN $guard BEGIN
         UPDATE $table SET sync_uuid=$uuidSql
           WHERE $pk=NEW.$pk AND (sync_uuid IS NULL OR sync_uuid='');
         $upd
-      END''');
-      await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_update
-        AFTER UPDATE ON $table WHEN $guard BEGIN $upd END''');
-      await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_delete
+      END''',
+      );
+      await db.execute(
+        '''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_update
+        AFTER UPDATE ON $table WHEN $guard BEGIN $upd END''',
+      );
+      await db.execute(
+        '''CREATE TRIGGER IF NOT EXISTS core_sync_${entity}_delete
         AFTER DELETE ON $table WHEN $guard AND OLD.sync_uuid IS NOT NULL BEGIN
         INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
         VALUES(OLD.user_id,'$entity',OLD.sync_uuid,NULL,1)
         ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
           local_id=NULL,deleted=1,generation=generation+1;
-      END''');
+      END''',
+      );
       final children = entity == 'task'
-          ? ['task_records', 'task_cycle_records'] : ['habit_records'];
+          ? ['task_records', 'task_cycle_records']
+          : ['habit_records'];
       for (final child in children) {
         for (final action in const ['INSERT', 'UPDATE', 'DELETE']) {
           final alias = action == 'DELETE' ? 'OLD' : 'NEW';
-          await db.execute('''CREATE TRIGGER IF NOT EXISTS core_sync_${child}_${action.toLowerCase()}
+          await db.execute(
+            '''CREATE TRIGGER IF NOT EXISTS core_sync_${child}_${action.toLowerCase()}
             AFTER $action ON $child WHEN $guard BEGIN
             INSERT INTO core_sync_dirty(user_id,record_type,record_uuid,local_id,deleted)
             SELECT p.user_id,'$entity',p.sync_uuid,p.$pk,0
               FROM $table p WHERE p.$pk=$alias.$pk AND p.sync_uuid IS NOT NULL
             ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
               local_id=excluded.local_id,deleted=0,generation=generation+1;
-          END''');
+          END''',
+          );
         }
       }
     }
@@ -448,10 +468,14 @@ class LocalDatabase {
   Future<void> _createPrivateSyncSchema(DatabaseExecutor db) async {
     final cols = await db.rawQuery('PRAGMA table_info(wellbeing_entries)');
     if (!cols.any((row) => row['name'] == 'sync_uuid')) {
-      await db.execute('ALTER TABLE wellbeing_entries ADD COLUMN sync_uuid TEXT');
+      await db.execute(
+        'ALTER TABLE wellbeing_entries ADD COLUMN sync_uuid TEXT',
+      );
     }
-    await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_wellbeing_sync_uuid '
-        'ON wellbeing_entries(user_id,sync_uuid)');
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_wellbeing_sync_uuid '
+      'ON wellbeing_entries(user_id,sync_uuid)',
+    );
     const dirty = '''INSERT INTO core_sync_dirty
       (user_id,record_type,record_uuid,local_id,deleted)
       VALUES(-1000000 - NEW.user_id,'diary',NEW.sync_uuid,NULL,0)
@@ -478,7 +502,8 @@ class LocalDatabase {
     const moodUuid = '2c5e5b7a-c84b-4547-b681-000000000000';
     for (final action in const ['INSERT', 'UPDATE', 'DELETE']) {
       final alias = action == 'DELETE' ? 'OLD' : 'NEW';
-      await db.execute('''CREATE TRIGGER IF NOT EXISTS private_moods_${action.toLowerCase()}
+      await db.execute(
+        '''CREATE TRIGGER IF NOT EXISTS private_moods_${action.toLowerCase()}
         AFTER $action ON wellbeing_moods
         WHEN $guard AND $alias.user_id > 0 BEGIN
         INSERT INTO core_sync_dirty
@@ -486,11 +511,53 @@ class LocalDatabase {
         VALUES(-1000000 - $alias.user_id,'mood_custom','$moodUuid',NULL,0)
         ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
           generation=generation+1;
-        END''');
+        END''',
+      );
     }
   }
 
   /// 每日情绪、经期、日记（与账号资料分离），数据库升级只新增表，不清空旧数据。
+
+  /// V2 encrypted local vault. No dates, diary text, mood names or period flags
+  /// are stored in this table's searchable columns.
+  Future<void> _createPrivateVaultSchema(DatabaseExecutor db) async {
+    await db.execute('''CREATE TABLE IF NOT EXISTS private_vault_records (
+      user_id INTEGER NOT NULL,
+      record_type TEXT NOT NULL CHECK(record_type IN ('diary','mood_custom')),
+      record_uuid TEXT NOT NULL,
+      envelope_json TEXT NOT NULL,
+      update_time TEXT NOT NULL,
+      PRIMARY KEY(user_id, record_type, record_uuid)
+    )''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_private_vault_user_type '
+      'ON private_vault_records(user_id, record_type)',
+    );
+    const guard = '(SELECT enabled FROM core_sync_runtime WHERE id=1)=1';
+    for (final action in const ['INSERT', 'UPDATE']) {
+      await db.execute(
+        '''CREATE TRIGGER IF NOT EXISTS private_vault_${action.toLowerCase()}
+        AFTER $action ON private_vault_records
+        WHEN $guard AND NEW.user_id > 0 BEGIN
+        INSERT INTO core_sync_dirty
+          (user_id,record_type,record_uuid,local_id,deleted)
+        VALUES(-1000000 - NEW.user_id,NEW.record_type,NEW.record_uuid,NULL,0)
+        ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+          local_id=NULL,deleted=0,generation=generation+1;
+      END''',
+      );
+    }
+    await db.execute('''CREATE TRIGGER IF NOT EXISTS private_vault_delete
+      AFTER DELETE ON private_vault_records
+      WHEN $guard AND OLD.user_id > 0 BEGIN
+      INSERT INTO core_sync_dirty
+        (user_id,record_type,record_uuid,local_id,deleted)
+      VALUES(-1000000 - OLD.user_id,OLD.record_type,OLD.record_uuid,NULL,1)
+      ON CONFLICT(user_id,record_type,record_uuid) DO UPDATE SET
+        local_id=NULL,deleted=1,generation=generation+1;
+    END''');
+  }
+
   Future<void> _createWellbeingSchema(DatabaseExecutor db) async {
     await db.execute('''CREATE TABLE IF NOT EXISTS wellbeing_entries (
       user_id INTEGER NOT NULL,
@@ -510,7 +577,9 @@ class LocalDatabase {
       PRIMARY KEY(user_id, name),
       UNIQUE(user_id, emoji)
     )''');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_wellbeing_diary_date ON wellbeing_entries(user_id, business_date)');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_wellbeing_diary_date ON wellbeing_entries(user_id, business_date)',
+    );
   }
 
   /// 自定义商品、购买与仓库，与现有盲盒业务独立。
@@ -554,8 +623,12 @@ class LocalDatabase {
       create_time TEXT NOT NULL,
       FOREIGN KEY(product_id) REFERENCES custom_products(product_id)
     )''');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_custom_products_user ON custom_products(user_id, enabled, product_id)');
-    await db.execute('CREATE INDEX IF NOT EXISTS idx_custom_purchases_user ON custom_purchase_records(user_id, create_time)');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_custom_products_user ON custom_products(user_id, enabled, product_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_custom_purchases_user ON custom_purchase_records(user_id, create_time)',
+    );
   }
 
   /// 商品种类和消耗属性彼此独立，旧商品自动归入「默认」。
@@ -568,7 +641,9 @@ class LocalDatabase {
     )''');
     final columns = await db.rawQuery('PRAGMA table_info(custom_products)');
     if (!columns.any((column) => column['name'] == 'category_name')) {
-      await db.execute("ALTER TABLE custom_products ADD COLUMN category_name TEXT NOT NULL DEFAULT '默认'");
+      await db.execute(
+        "ALTER TABLE custom_products ADD COLUMN category_name TEXT NOT NULL DEFAULT '默认'",
+      );
     }
   }
 
@@ -584,18 +659,114 @@ class LocalDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
 
     const items = <Map<String, Object>>[
-      {'item_id': 1, 'item_key': 'oil_blue_yellow', 'name': '油彩花草蝶', 'rarity': 'COMMON', 'description': '蓝黄蝶翼在油画般的花草间展开。', 'image_path': '/collectibles/butterfly/butterfly_oil_meadow.png', 'sort_order': 1},
-      {'item_id': 2, 'item_key': 'warm_lattice_shadow', 'name': '暖影镂彩蝶', 'rarity': 'RARE', 'description': '暖金色镂空蝶翼，带有皮影艺术的装饰感。', 'image_path': '/collectibles/butterfly/butterfly_warm_shadow.png', 'sort_order': 2},
-      {'item_id': 3, 'item_key': 'gothic_moon_beaded', 'name': '月下哥特蝶', 'rarity': 'LEGENDARY', 'description': '暗红珠饰与哥特花纹构成神秘的月下蝶影。', 'image_path': '/collectibles/butterfly/butterfly_gothic_moon.png', 'sort_order': 3},
-      {'item_id': 4, 'item_key': 'violet_garden_dream', 'name': '紫罗兰梦蝶', 'rarity': 'RARE', 'description': '紫罗兰色蝶翼融入柔和的梦幻花园。', 'image_path': '/collectibles/butterfly/butterfly_violet_garden.png', 'sort_order': 4},
-      {'item_id': 5, 'item_key': 'crystal_ice_realm', 'name': '冰晶幻蝶', 'rarity': 'EPIC', 'description': '由晶莹冰晶与冷色光芒构成的幻想蝶翼。', 'image_path': '/collectibles/butterfly/butterfly_crystal_ice.png', 'sort_order': 5},
-      {'item_id': 6, 'item_key': 'pop_art_colorful', 'name': '波普彩蝶', 'rarity': 'COMMON', 'description': '以高饱和撞色和波普艺术风格呈现的缤纷蝶翼。', 'image_path': '/collectibles/butterfly/butterfly_pop_art.png', 'sort_order': 6},
-      {'item_id': 7, 'item_key': 'pointillism_dream', 'name': '点彩幻蝶', 'rarity': 'COMMON', 'description': '细密色点汇聚成梦境般的彩色蝶翼。', 'image_path': '/collectibles/butterfly/butterfly_pointillism.png', 'sort_order': 7},
-      {'item_id': 8, 'item_key': 'mechanical_gear_realm', 'name': '齿轮机械蝶', 'rarity': 'EPIC', 'description': '精密齿轮与金属结构环绕发光的机械蝶翼。', 'image_path': '/collectibles/butterfly/butterfly_mechanical_gear.png', 'sort_order': 8},
-      {'item_id': 9, 'item_key': 'embroidered_garden', 'name': '锦绣花园蝶', 'rarity': 'COMMON', 'description': '以花卉刺绣和丰富纹样装饰的彩翼蝴蝶。', 'image_path': '/collectibles/butterfly/butterfly_embroidery_garden.png', 'sort_order': 9},
-      {'item_id': 10, 'item_key': 'golden_sakura_waves', 'name': '金彩樱海蝶', 'rarity': 'RARE', 'description': '金色纹样、樱花与海浪元素交织成华丽蝶翼。', 'image_path': '/collectibles/butterfly/butterfly_golden_sakura.png', 'sort_order': 10},
-      {'item_id': 11, 'item_key': 'gilded_ice_blue_silk', 'name': '鎏金冰纱蝶', 'rarity': 'EPIC', 'description': '鎏金边饰与冰蓝薄纱交织出轻盈而华丽的蝶翼。', 'image_path': '/collectibles/butterfly/butterfly_gilded_ice_silk.png', 'sort_order': 11},
-      {'item_id': 12, 'item_key': 'cosmic_nebula', 'name': '星云宇宙蝶', 'rarity': 'LEGENDARY', 'description': '霓虹蓝紫色蝶翼仿佛映照着遥远星云。', 'image_path': '/collectibles/butterfly/butterfly_cosmic_nebula.png', 'sort_order': 12},
+      {
+        'item_id': 1,
+        'item_key': 'oil_blue_yellow',
+        'name': '油彩花草蝶',
+        'rarity': 'COMMON',
+        'description': '蓝黄蝶翼在油画般的花草间展开。',
+        'image_path': '/collectibles/butterfly/butterfly_oil_meadow.png',
+        'sort_order': 1,
+      },
+      {
+        'item_id': 2,
+        'item_key': 'warm_lattice_shadow',
+        'name': '暖影镂彩蝶',
+        'rarity': 'RARE',
+        'description': '暖金色镂空蝶翼，带有皮影艺术的装饰感。',
+        'image_path': '/collectibles/butterfly/butterfly_warm_shadow.png',
+        'sort_order': 2,
+      },
+      {
+        'item_id': 3,
+        'item_key': 'gothic_moon_beaded',
+        'name': '月下哥特蝶',
+        'rarity': 'LEGENDARY',
+        'description': '暗红珠饰与哥特花纹构成神秘的月下蝶影。',
+        'image_path': '/collectibles/butterfly/butterfly_gothic_moon.png',
+        'sort_order': 3,
+      },
+      {
+        'item_id': 4,
+        'item_key': 'violet_garden_dream',
+        'name': '紫罗兰梦蝶',
+        'rarity': 'RARE',
+        'description': '紫罗兰色蝶翼融入柔和的梦幻花园。',
+        'image_path': '/collectibles/butterfly/butterfly_violet_garden.png',
+        'sort_order': 4,
+      },
+      {
+        'item_id': 5,
+        'item_key': 'crystal_ice_realm',
+        'name': '冰晶幻蝶',
+        'rarity': 'EPIC',
+        'description': '由晶莹冰晶与冷色光芒构成的幻想蝶翼。',
+        'image_path': '/collectibles/butterfly/butterfly_crystal_ice.png',
+        'sort_order': 5,
+      },
+      {
+        'item_id': 6,
+        'item_key': 'pop_art_colorful',
+        'name': '波普彩蝶',
+        'rarity': 'COMMON',
+        'description': '以高饱和撞色和波普艺术风格呈现的缤纷蝶翼。',
+        'image_path': '/collectibles/butterfly/butterfly_pop_art.png',
+        'sort_order': 6,
+      },
+      {
+        'item_id': 7,
+        'item_key': 'pointillism_dream',
+        'name': '点彩幻蝶',
+        'rarity': 'COMMON',
+        'description': '细密色点汇聚成梦境般的彩色蝶翼。',
+        'image_path': '/collectibles/butterfly/butterfly_pointillism.png',
+        'sort_order': 7,
+      },
+      {
+        'item_id': 8,
+        'item_key': 'mechanical_gear_realm',
+        'name': '齿轮机械蝶',
+        'rarity': 'EPIC',
+        'description': '精密齿轮与金属结构环绕发光的机械蝶翼。',
+        'image_path': '/collectibles/butterfly/butterfly_mechanical_gear.png',
+        'sort_order': 8,
+      },
+      {
+        'item_id': 9,
+        'item_key': 'embroidered_garden',
+        'name': '锦绣花园蝶',
+        'rarity': 'COMMON',
+        'description': '以花卉刺绣和丰富纹样装饰的彩翼蝴蝶。',
+        'image_path': '/collectibles/butterfly/butterfly_embroidery_garden.png',
+        'sort_order': 9,
+      },
+      {
+        'item_id': 10,
+        'item_key': 'golden_sakura_waves',
+        'name': '金彩樱海蝶',
+        'rarity': 'RARE',
+        'description': '金色纹样、樱花与海浪元素交织成华丽蝶翼。',
+        'image_path': '/collectibles/butterfly/butterfly_golden_sakura.png',
+        'sort_order': 10,
+      },
+      {
+        'item_id': 11,
+        'item_key': 'gilded_ice_blue_silk',
+        'name': '鎏金冰纱蝶',
+        'rarity': 'EPIC',
+        'description': '鎏金边饰与冰蓝薄纱交织出轻盈而华丽的蝶翼。',
+        'image_path': '/collectibles/butterfly/butterfly_gilded_ice_silk.png',
+        'sort_order': 11,
+      },
+      {
+        'item_id': 12,
+        'item_key': 'cosmic_nebula',
+        'name': '星云宇宙蝶',
+        'rarity': 'LEGENDARY',
+        'description': '霓虹蓝紫色蝶翼仿佛映照着遥远星云。',
+        'image_path': '/collectibles/butterfly/butterfly_cosmic_nebula.png',
+        'sort_order': 12,
+      },
     ];
     for (final item in items) {
       await db.insert('collectible_items', {
@@ -625,34 +796,178 @@ class LocalDatabase {
     const normalRewards = <Map<String, Object?>>[
       {'code': 'COIN_15', 'asset_type': 'COIN', 'amount': 15, 'weight': 50},
       {'code': 'EXP_30', 'asset_type': 'EXP', 'amount': 30, 'weight': 35},
-      {'code': 'BFLY_OIL_MEADOW', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 1, 'weight': 3},
-      {'code': 'BFLY_WARM_SHADOW', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 2, 'weight': 2},
-      {'code': 'BFLY_GOTHIC_MOON', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 3, 'weight': 1},
-      {'code': 'BFLY_VIOLET_GARDEN', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 4, 'weight': 2},
-      {'code': 'BFLY_CRYSTAL_ICE', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 5, 'weight': 1},
-      {'code': 'BFLY_POP_ART', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 6, 'weight': 3},
-      {'code': 'BFLY_POINTILLISM', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 7, 'weight': 3},
-      {'code': 'BFLY_MECHANICAL_GEAR', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 8, 'weight': 1},
-      {'code': 'BFLY_EMBROIDERY', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 9, 'weight': 3},
-      {'code': 'BFLY_GOLDEN_SAKURA', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 10, 'weight': 2},
-      {'code': 'BFLY_GILDED_ICE_SILK', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 11, 'weight': 1},
-      {'code': 'BFLY_COSMIC_NEBULA', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 12, 'weight': 1},
+      {
+        'code': 'BFLY_OIL_MEADOW',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 1,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_WARM_SHADOW',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 2,
+        'weight': 2,
+      },
+      {
+        'code': 'BFLY_GOTHIC_MOON',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 3,
+        'weight': 1,
+      },
+      {
+        'code': 'BFLY_VIOLET_GARDEN',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 4,
+        'weight': 2,
+      },
+      {
+        'code': 'BFLY_CRYSTAL_ICE',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 5,
+        'weight': 1,
+      },
+      {
+        'code': 'BFLY_POP_ART',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 6,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_POINTILLISM',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 7,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_MECHANICAL_GEAR',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 8,
+        'weight': 1,
+      },
+      {
+        'code': 'BFLY_EMBROIDERY',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 9,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_GOLDEN_SAKURA',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 10,
+        'weight': 2,
+      },
+      {
+        'code': 'BFLY_GILDED_ICE_SILK',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 11,
+        'weight': 1,
+      },
+      {
+        'code': 'BFLY_COSMIC_NEBULA',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 12,
+        'weight': 1,
+      },
     ];
     const premiumRewards = <Map<String, Object?>>[
       {'code': 'COIN_100', 'asset_type': 'COIN', 'amount': 100, 'weight': 40},
       {'code': 'EXP_200', 'asset_type': 'EXP', 'amount': 200, 'weight': 40},
-      {'code': 'BFLY_OIL_MEADOW', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 1, 'weight': 3},
-      {'code': 'BFLY_WARM_SHADOW', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 2, 'weight': 4},
-      {'code': 'BFLY_GOTHIC_MOON', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 3, 'weight': 5},
-      {'code': 'BFLY_VIOLET_GARDEN', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 4, 'weight': 4},
-      {'code': 'BFLY_CRYSTAL_ICE', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 5, 'weight': 6},
-      {'code': 'BFLY_POP_ART', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 6, 'weight': 3},
-      {'code': 'BFLY_POINTILLISM', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 7, 'weight': 3},
-      {'code': 'BFLY_MECHANICAL_GEAR', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 8, 'weight': 6},
-      {'code': 'BFLY_EMBROIDERY', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 9, 'weight': 3},
-      {'code': 'BFLY_GOLDEN_SAKURA', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 10, 'weight': 4},
-      {'code': 'BFLY_GILDED_ICE_SILK', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 11, 'weight': 6},
-      {'code': 'BFLY_COSMIC_NEBULA', 'asset_type': 'COLLECTIBLE', 'amount': 1, 'item_id': 12, 'weight': 5},
+      {
+        'code': 'BFLY_OIL_MEADOW',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 1,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_WARM_SHADOW',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 2,
+        'weight': 4,
+      },
+      {
+        'code': 'BFLY_GOTHIC_MOON',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 3,
+        'weight': 5,
+      },
+      {
+        'code': 'BFLY_VIOLET_GARDEN',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 4,
+        'weight': 4,
+      },
+      {
+        'code': 'BFLY_CRYSTAL_ICE',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 5,
+        'weight': 6,
+      },
+      {
+        'code': 'BFLY_POP_ART',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 6,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_POINTILLISM',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 7,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_MECHANICAL_GEAR',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 8,
+        'weight': 6,
+      },
+      {
+        'code': 'BFLY_EMBROIDERY',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 9,
+        'weight': 3,
+      },
+      {
+        'code': 'BFLY_GOLDEN_SAKURA',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 10,
+        'weight': 4,
+      },
+      {
+        'code': 'BFLY_GILDED_ICE_SILK',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 11,
+        'weight': 6,
+      },
+      {
+        'code': 'BFLY_COSMIC_NEBULA',
+        'asset_type': 'COLLECTIBLE',
+        'amount': 1,
+        'item_id': 12,
+        'weight': 5,
+      },
     ];
     for (final reward in normalRewards) {
       await db.insert('shop_rewards', {

@@ -22,27 +22,16 @@ void main() {
     await database.close();
   });
 
-  test('每日签到分别返回月度连续、历史连续和累计天数', () async {
-    final first = await repository.dailySignIn();
-    expect(first['granted'], true);
-    expect(first['monthlyStreakDay'], 1);
-    expect(first['allTimeStreakDay'], 1);
-    expect(first['totalSignInDays'], 1);
-
-    final repeated = await repository.dailySignIn();
-    expect(repeated['granted'], false);
-    expect(repeated['monthlyStreakDay'], 1);
-    expect(repeated['allTimeStreakDay'], 1);
-    expect(repeated['totalSignInDays'], 1);
-
+  test('本地水滴签到已停用，必须由服务器发放', () async {
+    await expectLater(
+      repository.dailySignIn(),
+      throwsA(isA<StateError>()),
+    );
     final stats = await repository.getDailySignInStats();
-    expect(stats['monthlyStreakDay'], 1);
-    expect(stats['allTimeStreakDay'], 1);
-    expect(stats['longestStreakDay'], 1);
-    expect(stats['totalSignInDays'], 1);
+    expect(stats['totalSignInDays'], 0);
   });
 
-  test('月初重置月度连续，但历史连续和累计天数跨月保留', () async {
+  test('旧版本地签到记录不会被已停用的本地接口修改', () async {
     final db = await database.database;
     final repositoryAtMonthStart = LocalPlanRepository(
       userId: 1,
@@ -62,14 +51,23 @@ void main() {
       });
     }
 
-    final result = await repositoryAtMonthStart.dailySignIn();
-
-    expect(result['monthlyStreakDay'], 1);
-    expect(result['allTimeStreakDay'], 3);
-    expect(result['longestStreakDay'], 3);
-    expect(result['totalSignInDays'], 3);
-    expect(result['bonusWater'], 0);
-    expect(result['totalWater'], 5);
+    final before = await db.query(
+      'daily_sign_ins',
+      where: 'user_id = ?',
+      whereArgs: [1],
+      orderBy: 'business_date',
+    );
+    await expectLater(
+      repositoryAtMonthStart.dailySignIn(),
+      throwsA(isA<StateError>()),
+    );
+    final after = await db.query(
+      'daily_sign_ins',
+      where: 'user_id = ?',
+      whereArgs: [1],
+      orderBy: 'business_date',
+    );
+    expect(after, before);
   });
 
   test('本地备份可以完整恢复业务数据和偏好设置', () async {
@@ -125,7 +123,8 @@ void main() {
   test('存储状态返回引擎、版本和业务表记录数', () async {
     final status = await repository.getStorageStatus();
     expect(status['engine'], contains('SQLite'));
-    expect(status['schemaVersion'], 1);
+    final db = await database.database;
+    expect(status['schemaVersion'], await db.getVersion());
     expect(status['counts'], isA<Map<String, int>>());
     expect(status['totalRecords'], greaterThan(0));
   });

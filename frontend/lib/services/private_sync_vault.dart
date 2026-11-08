@@ -6,20 +6,20 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import 'core_sync_service.dart';
-
-/// E2EE key is never sent to mod-server. The server stores only a random KDF
-/// salt and an authenticated encrypted verifier. Recovery phrase is not stored.
-/// On Android, an already-unlocked key is cached in platform secure storage;
-/// browsers must explicitly unlock for every fresh session.
+/// V2 account private-data key holder.
+///
+/// The 256-bit AMK is generated on the client and is never uploaded in clear.
+/// It is wrapped by the OPAQUE export key before it is stored on the server.
+/// This class only keeps an in-memory copy while the current account session is
+/// active and a device-protected copy in platform secure storage for seamless
+/// refresh/reopen on a trusted device.
 class PrivateSyncVault extends ChangeNotifier {
   PrivateSyncVault._();
   static final PrivateSyncVault instance = PrivateSyncVault._();
-  static const kdfIterations = 210000;
+
+  static const int keyVersion = 2;
   static const _storage = FlutterSecureStorage();
   static final _aes = AesGcm.with256bits();
-  static final _kdf = Pbkdf2(macAlgorithm: Hmac.sha256(),
-      iterations: kdfIterations, bits: 256);
   int? _user;
   List<int>? _key;
   String? _message;
@@ -28,6 +28,76 @@ class PrivateSyncVault extends ChangeNotifier {
   bool get isUnlocked => _key != null;
   String? get message => _message;
 
+  static List<int> _random(int count) {
+    final rng = Random.secure();
+    return List<int>.generate(count, (_) => rng.nextInt(256));
+  }
+
+  static String _scope(int localUserId) =>
+      localUserId <= -1000001 ? '${-1000000 - localUserId}' : 'guest-$localUserId';
+
+  String _storageKey(int localUserId) => 'pbb.account_master_key.v2.${_scope(localUserId)}';
+
+  String _aad(int user, String type, String uuid) =>
+      'PlanBlindBox:private-vault:v2:${_scope(user)}:$type:$uuid';
+
+  /// Activates a key obtained from a successful OPAQUE login/registration.
+  /// A device-protected copy is stored so a normal refresh does not ask for a
+  /// second password. On Web this relies on flutter_secure_storage's
+  /// WebCrypto-backed origin storage and therefore requires HTTPS/localhost.
+  Future<void> activate(int localUserId, List<int> masterKey,
+      {bool persist = true}) async {
+    if (masterKey.length != 32) {
+      throw const FormatException('账号主密钥长度必须为 256 bit');
+    }
+    _user = localUserId;
+    _key = List<int>.from(masterKey);
+    _message = '私密数据仓库已解锁';
+    if (persist) {
+      try {
+        await _storage.write(
+          key: _storageKey(localUserId),
+          value: base64Encode(masterKey),
+        );
+      } catch (_) {
+        _message = '本次已解锁；设备安全存储不可用，重新打开时需要重新登录';
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Restore the AMK only from this device's secure storage. No server request
+  /// or user-managed recovery phrase is involved in the normal path.
+  Future<bool> tryRestore(int localUserId) async {
+    if (unlocked(localUserId)) return true;
+    try {
+      final stored = await _storage.read(key: _storageKey(localUserId));
+      if (stored == null) return false;
+      final key = base64Decode(stored);
+      if (key.length != 32) {
+        await _storage.delete(key: _storageKey(localUserId));
+        return false;
+      }
+      _user = localUserId;
+      _key = key;
+      _message = '已从本机安全存储恢复私密数据密钥';
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Guest data is still encrypted locally, but the guest key is device-only
+  /// and is never eligible for cloud sync.
+  Future<void> ensureGuestKey() async {
+    if (unlocked(-1)) return;
+    if (await tryRestore(-1)) return;
+    await activate(-1, _random(32));
+  }
+
+  /// Locks the in-memory copy. The device-wrapped copy is retained so normal
+  /// account re-entry can restore it without an extra sync password.
   void lock() {
     _key = null;
     _user = null;
@@ -35,134 +105,25 @@ class PrivateSyncVault extends ChangeNotifier {
     notifyListeners();
   }
 
-  static List<int> _random(int count) {
-    final rng = Random.secure();
-    return List<int>.generate(count, (_) => rng.nextInt(256));
+  Future<void> forgetDeviceKey(int localUserId) async {
+    await _storage.delete(key: _storageKey(localUserId));
+    if (_user == localUserId) lock();
   }
 
-  static List<int> _decode(String value) => base64Decode(value);
-
-  static String _ownerScope(int localUserId) => '${-1000000 - localUserId}';
-  String _aad(int user, String type, String uuid) =>
-      'PlanBlindBox:e2ee:v1:${_ownerScope(user)}:$type:$uuid';
-
-  Future<Map<String, dynamic>> _seal(List<int> key, String text,
-      String aad) async {
-    final box = await _aes.encrypt(utf8.encode(text),
-        secretKey: SecretKey(key), nonce: _random(12), aad: utf8.encode(aad));
-    return {
-      'alg': 'aes-256-gcm',
-      'keyVersion': 1,
-      'nonce': base64Encode(box.nonce),
-      'ciphertext': base64Encode(box.cipherText),
-      'tag': base64Encode(box.mac.bytes),
-    };
+  List<int> _requireKey(int user) {
+    if (!unlocked(user)) throw StateError('私密数据仓库尚未解锁');
+    return _key!;
   }
 
-  Future<String> _open(List<int> key, Map<String, dynamic> payload,
-      String aad) async {
-    if (payload['alg'] != 'aes-256-gcm' || payload['keyVersion'] != 1) {
-      throw const FormatException('不支持的私密数据加密版本');
-    }
-    final nonce = _decode(payload['nonce'] as String);
-    final mac = _decode(payload['tag'] as String);
-    if (nonce.length != 12 || mac.length != 16) {
-      throw const FormatException('无效的加密数据');
-    }
-    final plaintext = await _aes.decrypt(
-      SecretBox(_decode(payload['ciphertext'] as String),
-          nonce: nonce, mac: Mac(mac)),
-      secretKey: SecretKey(key), aad: utf8.encode(aad));
-    return utf8.decode(plaintext);
-  }
-
-  Future<List<int>> _derive(String password, String salt) async {
-    if (password.length < 10) {
-      throw ArgumentError('私密同步恢复口令至少需要10个字符');
-    }
-    final s = _decode(salt);
-    if (s.length < 16 || s.length > 64) throw const FormatException('密钥盐值不合法');
-    return (await _kdf.deriveKeyFromPassword(password: password, nonce: s))
-        .extractBytes();
-  }
-
-  Future<void> _accept(int user, List<int> key,
-      Map<String, dynamic> verifier) async {
-    final value = await _open(key, verifier, _aad(user, 'verify', 'v1'));
-    if (value != 'PlanBlindBox private sync key verification v1') {
-      throw StateError('恢复口令不正确');
-    }
-    _user = user;
-    _key = key;
-    _message = '私密数据加密同步已解锁';
-    // Web secure storage is origin-scoped; do not persist a reusable E2EE key there.
-    if (!kIsWeb) {
-      try {
-        await _storage.write(key: 'pbb.private.key.${_ownerScope(user)}',
-            value: base64Encode(key));
-      } catch (_) { // Keystore may be unavailable in desktop unit tests.
-        _message = '本次已解锁；设备安全存储不可用，下次需要重新输入口令';
-      }
-    }
-    notifyListeners();
-  }
-
-  Future<bool> tryRestore(int user, String token, CoreSyncClient client) async {
-    if (unlocked(user)) return true;
-    if (kIsWeb) return false;
-    final stored = await _storage.read(key: 'pbb.private.key.${_ownerScope(user)}');
-    if (stored == null) return false;
-    final config = await client.cryptoConfig(token);
-    if (config['configured'] != true) return false;
-    try {
-      final key = _decode(stored);
-      if (key.length != 32) return false;
-      await _accept(user, key, Map<String, dynamic>.from(config['verifier'] as Map));
-      return true;
-    } catch (_) {
-      await _storage.delete(key: 'pbb.private.key.${_ownerScope(user)}');
-      return false;
-    }
-  }
-
-  Future<void> unlock(int user, String token, CoreSyncClient client,
-      String recoveryPhrase) async {
-    if (user >= -1000000) throw StateError('请先登录账号');
-    var config = await client.cryptoConfig(token);
-    if (config['configured'] == true) {
-      final key = await _derive(recoveryPhrase, config['salt'] as String);
-      try {
-        await _accept(user, key, Map<String, dynamic>.from(config['verifier'] as Map));
-      } catch (_) {
-        throw StateError('恢复口令错误或云端密钥参数损坏');
-      }
-      return;
-    }
-    final salt = base64Encode(_random(16));
-    final key = await _derive(recoveryPhrase, salt);
-    final verifier = await _seal(key,
-        'PlanBlindBox private sync key verification v1',
-        _aad(user, 'verify', 'v1'));
-    try {
-      config = await client.createCryptoConfig(token,
-          salt: salt, iterations: kdfIterations, verifier: verifier);
-    } on CoreSyncException catch (error) {
-      if (error.status != 409) rethrow;
-      // Another device provisioned the key first; NEVER replace its config.
-      config = await client.cryptoConfig(token);
-    }
-    final established = await _derive(recoveryPhrase, config['salt'] as String);
-    await _accept(user, established,
-        Map<String, dynamic>.from(config['verifier'] as Map));
-  }
-
+  /// Deterministic, account-specific opaque ID. The date itself is never sent
+  /// to the server or stored in the V2 private-vault index.
   String idForDay(int user, String day) {
-    if (!unlocked(user)) throw StateError('私密同步尚未解锁');
+    final key = _requireKey(user);
     if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(day)) {
       throw const FormatException('日期格式无效');
     }
-    final digest = hashes.Hmac(hashes.sha256, _key!)
-        .convert(utf8.encode('PlanBlindBox:private-day:v1:$day')).bytes;
+    final digest = hashes.Hmac(hashes.sha256, key)
+        .convert(utf8.encode('PlanBlindBox:private-day:v2:$day')).bytes;
     final bytes = digest.take(16).toList();
     bytes[6] = (bytes[6] & 0x0f) | 0x50;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -173,15 +134,62 @@ class PrivateSyncVault extends ChangeNotifier {
 
   Future<Map<String, dynamic>> encryptRecord(int user, String uuid,
       Map<String, dynamic> contents, {String type = 'diary'}) async {
-    if (!unlocked(user)) throw StateError('先解锁私密同步');
-    return _seal(_key!, jsonEncode(contents), _aad(user, type, uuid));
+    final key = _requireKey(user);
+    if (type != 'diary' && type != 'mood_custom') {
+      throw const FormatException('不支持的私密记录类型');
+    }
+    final privatePayload = <String, dynamic>{...contents, '_vaultType': type};
+    final box = await _aes.encrypt(
+      utf8.encode(jsonEncode(privatePayload)),
+      secretKey: SecretKey(key),
+      nonce: _random(12),
+      // The server sees one generic private_blob type. The real record type
+      // exists only inside ciphertext and is authenticated as payload data.
+      aad: utf8.encode(_aad(user, 'private_blob', uuid)),
+    );
+    return {
+      'alg': 'aes-256-gcm',
+      'keyVersion': keyVersion,
+      'nonce': base64Encode(box.nonce),
+      'ciphertext': base64Encode(box.cipherText),
+      'tag': base64Encode(box.mac.bytes),
+    };
   }
 
   Future<Map<String, dynamic>> decryptRecord(int user, String uuid,
-      Map<String, dynamic> envelope, {String type = 'diary'}) async {
-    if (!unlocked(user)) throw StateError('先解锁私密同步');
-    final text = await _open(_key!, envelope, _aad(user, type, uuid));
-    return Map<String, dynamic>.from(jsonDecode(text) as Map);
+      Map<String, dynamic> envelope, {String type = 'diary',
+      bool includeVaultType = false}) async {
+    final key = _requireKey(user);
+    const expected = {'alg', 'keyVersion', 'nonce', 'ciphertext', 'tag'};
+    if (envelope.keys.toSet().difference(expected).isNotEmpty ||
+        envelope.keys.toSet().length != expected.length ||
+        envelope['alg'] != 'aes-256-gcm' ||
+        envelope['keyVersion'] != keyVersion) {
+      throw const FormatException('不支持或不合法的 V2 私密数据加密信封');
+    }
+    final nonce = base64Decode(envelope['nonce'] as String);
+    final cipher = base64Decode(envelope['ciphertext'] as String);
+    final tag = base64Decode(envelope['tag'] as String);
+    if (nonce.length != 12 || tag.length != 16 || cipher.isEmpty) {
+      throw const FormatException('V2 私密数据加密参数无效');
+    }
+    final plaintext = await _aes.decrypt(
+      SecretBox(cipher, nonce: nonce, mac: Mac(tag)),
+      secretKey: SecretKey(key),
+      aad: utf8.encode(_aad(user, 'private_blob', uuid)),
+    );
+    final decoded = jsonDecode(utf8.decode(plaintext));
+    if (decoded is! Map) throw const FormatException('私密记录内容不是对象');
+    final result = Map<String, dynamic>.from(decoded);
+    final actualType = result['_vaultType'];
+    if (actualType != 'diary' && actualType != 'mood_custom') {
+      throw const FormatException('私密记录类型标记无效');
+    }
+    if (type != 'private_blob' && actualType != type) {
+      throw const FormatException('私密记录类型与本地索引不匹配');
+    }
+    if (!includeVaultType) result.remove('_vaultType');
+    return result;
   }
 }
 

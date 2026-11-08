@@ -4,7 +4,6 @@ import '../data/shop_api.dart';
 import '../data/collection_api.dart';
 import '../data/today_api.dart';
 import '../data/custom_shop_api.dart';
-import '../data/api_exception.dart';
 import 'custom_shop_pages.dart';
 import '../data/local/collectible_assets.dart';
 import '../theme/app_theme.dart';
@@ -12,11 +11,7 @@ import '../widgets/dashboard_cards.dart';
 
 /// 商店是 AppShell 的一级页面，与「今日」「任务库」平级。
 class StorePage extends StatefulWidget {
-  const StorePage({
-    super.key,
-    required this.api,
-    this.refreshToken = 0,
-  });
+  const StorePage({super.key, required this.api, this.refreshToken = 0});
 
   final TodayApi api;
   final int refreshToken;
@@ -56,8 +51,10 @@ class _StorePageState extends State<StorePage> {
   void initState() {
     super.initState();
     _shopApi = ShopApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
-    _collectionApi =
-        CollectionApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
+    _collectionApi = CollectionApi(
+      baseUrl: widget.api.baseUrl,
+      userId: widget.api.userId,
+    );
     _customShopApi = CustomShopApi(userId: widget.api.userId);
     _load();
     _loadCustom();
@@ -69,9 +66,14 @@ class _StorePageState extends State<StorePage> {
     if (oldWidget.api != widget.api) {
       _shopApi.dispose();
       _collectionApi.dispose();
-      _shopApi = ShopApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
-      _collectionApi =
-          CollectionApi(baseUrl: widget.api.baseUrl, userId: widget.api.userId);
+      _shopApi = ShopApi(
+        baseUrl: widget.api.baseUrl,
+        userId: widget.api.userId,
+      );
+      _collectionApi = CollectionApi(
+        baseUrl: widget.api.baseUrl,
+        userId: widget.api.userId,
+      );
       _customShopApi = CustomShopApi(userId: widget.api.userId);
       _customProducts = [];
       _pendingCustomRequestId = null;
@@ -99,17 +101,26 @@ class _StorePageState extends State<StorePage> {
 
   Future<void> _loadCustom() async {
     if (!mounted) return;
-    setState(() { _loadingCustom = true; _customError = null; });
+    setState(() {
+      _loadingCustom = true;
+      _customError = null;
+    });
     try {
       final results = await Future.wait<dynamic>([
-        _customShopApi.getProducts(), _customShopApi.getCategories(),
+        _customShopApi.getProducts(),
+        _customShopApi.getCategories(),
       ]);
-      if (mounted) setState(() {
-        _customProducts = results[0] as List<CustomProduct>;
-        _categories = results[1] as List<String>;
-        if (_customFilter != '全部' && _customFilter != '默认' &&
-            !_categories.contains(_customFilter)) _customFilter = '全部';
-      });
+      if (mounted) {
+        setState(() {
+          _customProducts = results[0] as List<CustomProduct>;
+          _categories = results[1] as List<String>;
+          if (_customFilter != '全部' &&
+              _customFilter != '默认' &&
+              !_categories.contains(_customFilter)) {
+            _customFilter = '全部';
+          }
+        });
+      }
     } catch (error) {
       if (mounted) setState(() => _customError = '$error');
     } finally {
@@ -119,8 +130,12 @@ class _StorePageState extends State<StorePage> {
 
   Future<void> _openCustomEditor([CustomProduct? product]) async {
     final changed = await showModalBottomSheet<bool>(
-      context: context, isScrollControlled: true, showDragHandle: true,
-      builder: (_) => CustomProductEditorSheet(api: _customShopApi, product: product));
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) =>
+          CustomProductEditorSheet(api: _customShopApi, product: product),
+    );
     if (changed == true && mounted) {
       _showMessage(product == null ? '商品创建成功' : '商品已更新');
       await _loadCustom();
@@ -128,44 +143,68 @@ class _StorePageState extends State<StorePage> {
   }
 
   Future<void> _openWarehouse() async {
-    await Navigator.of(context).push<void>(MaterialPageRoute(
-      builder: (_) => CustomWarehousePage(api: _customShopApi)));
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => CustomWarehousePage(api: _customShopApi),
+      ),
+    );
     if (mounted) await _loadCustom();
   }
 
   void _openHistory() {
-    Navigator.of(context).push<void>(MaterialPageRoute(
-      builder: (_) => Scaffold(
-        appBar: AppBar(title: const Text('开盒记录')),
-        body: ListView(padding: const EdgeInsets.all(16), children: [
-          if (_history.isEmpty)
-            const Padding(padding: EdgeInsets.only(top: 72),
-              child: Center(child: Text('暂无开盒记录'))),
-          for (final item in _history)
-            Card(child: ListTile(
-              leading: const Icon(Icons.redeem_rounded, color: AppColors.forest),
-              title: Text(item.boxName),
-              subtitle: Text(item.rewardType == 'COLLECTIBLE' && item.itemName != null
-                ? '收藏品：${item.itemName} · ${_rarityLabel(item.itemRarity ?? '')}'
-                : '获得 +${item.rewardAmount} ${_assetLabel(item.rewardType)}'),
-              trailing: Text('-${item.priceCoin} 金币'),
-            )),
-        ]),
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('开盒记录')),
+          body: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (_history.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 72),
+                  child: Center(child: Text('暂无开盒记录')),
+                ),
+              for (final item in _history)
+                Card(
+                  child: ListTile(
+                    leading: const Icon(
+                      Icons.redeem_rounded,
+                      color: AppColors.forest,
+                    ),
+                    title: Text(item.boxName),
+                    subtitle: Text(
+                      item.rewardType == 'COLLECTIBLE' && item.itemName != null
+                          ? '收藏品：${item.itemName} · ${_rarityLabel(item.itemRarity ?? '')}'
+                          : '获得 +${item.rewardAmount} ${_assetLabel(item.rewardType)}',
+                    ),
+                    trailing: Text('-${item.priceCoin} 金币'),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
-    ));
+    );
   }
 
   Future<void> _archiveCustom(CustomProduct product) async {
-    final confirm = await showDialog<bool>(context: context,
+    final confirm = await showDialog<bool>(
+      context: context,
       builder: (context) => AlertDialog(
         title: const Text('下架商品？'),
         content: Text('「${product.name}」将从商店隐藏。已购买的物品继续保留在仓库。'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, true),
-            child: const Text('确认下架')),
-        ]));
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认下架'),
+          ),
+        ],
+      ),
+    );
     if (confirm != true || !mounted) return;
     try {
       await _customShopApi.archive(product.id);
@@ -179,21 +218,31 @@ class _StorePageState extends State<StorePage> {
 
   Future<void> _purchaseCustom(CustomProduct product) async {
     if (_buyingCustom || _loadingCustom) return;
-    if (_pendingCustomRequestId != null && _pendingCustomProductId != product.id) {
+    if (_pendingCustomRequestId != null &&
+        _pendingCustomProductId != product.id) {
       _showMessage('还有一笔购买结果未确认，请先重试原商品');
       return;
     }
-    final confirm = await showDialog<bool>(context: context,
+    final confirm = await showDialog<bool>(
+      context: context,
       builder: (context) => AlertDialog(
         title: Text('购买「${product.name}」？'),
-        content: Text('花费 ${product.priceCoin} 金币购买 1 个。'
-          '${_pendingCustomRequestId != null ? '（重试使用原购买编号，不会重复扣款）' : ''}'),
+        content: Text(
+          '花费 ${product.priceCoin} 金币购买 1 个。'
+          '${_pendingCustomRequestId != null ? '（重试使用原购买编号，不会重复扣款）' : ''}',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, true),
-            child: const Text('确认购买')),
-        ]));
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认购买'),
+          ),
+        ],
+      ),
+    );
     if (confirm != true || !mounted) return;
     final requestId = _pendingCustomRequestId ?? newShopRequestId();
     setState(() {
@@ -204,7 +253,9 @@ class _StorePageState extends State<StorePage> {
     });
     try {
       final result = await _customShopApi.purchase(
-        productId: product.id, requestId: requestId);
+        productId: product.id,
+        requestId: requestId,
+      );
       if (!mounted) return;
       setState(() {
         _pendingCustomRequestId = null;
@@ -214,108 +265,182 @@ class _StorePageState extends State<StorePage> {
       await _refreshAll();
     } on ApiException catch (error) {
       // 确定性业务错误（扣款事务已回滚）可安全清除 pending 状态。
-      if (mounted && (error.statusCode == 409 || error.statusCode == 404 ||
-          error.statusCode == 400)) {
-        setState(() { _pendingCustomRequestId = null; _pendingCustomProductId = null; });
+      if (mounted &&
+          (error.statusCode == 409 ||
+              error.statusCode == 404 ||
+              error.statusCode == 400)) {
+        setState(() {
+          _pendingCustomRequestId = null;
+          _pendingCustomProductId = null;
+        });
       }
       _showMessage('购买失败：$error');
     } catch (error) {
       _showMessage('购买结果尚未确认：$error。重试该商品时会复用请求编号');
     } finally {
-      if (mounted) setState(() { _buyingCustom = false; _buyingCustomProductId = null; });
+      if (mounted)
+        setState(() {
+          _buyingCustom = false;
+          _buyingCustomProductId = null;
+        });
     }
   }
 
   Future<void> _manageCategories() async {
-    await showDialog<void>(context: context, builder: (dialogContext) =>
-      StatefulBuilder(builder: (context, updateDialog) => AlertDialog(
-        title: const Text('管理商品种类'),
-        content: SizedBox(width: 320, child: Column(
-          mainAxisSize: MainAxisSize.min, children: [
-            if (_categories.isEmpty) const Text('暂无自定义种类，使用「默认」'),
-            for (final category in _categories)
-              ListTile(dense: true, title: Text(category),
-                trailing: IconButton(icon: const Icon(Icons.delete_outline),
-                  tooltip: '删除种类并归入默认', onPressed: () async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, updateDialog) => AlertDialog(
+          title: const Text('管理商品种类'),
+          content: SizedBox(
+            width: 320,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_categories.isEmpty) const Text('暂无自定义种类，使用「默认」'),
+                for (final category in _categories)
+                  ListTile(
+                    dense: true,
+                    title: Text(category),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      tooltip: '删除种类并归入默认',
+                      onPressed: () async {
+                        try {
+                          await _customShopApi.deleteCategory(category);
+                          await _loadCustom();
+                          if (dialogContext.mounted) updateDialog(() {});
+                        } catch (error) {
+                          _showMessage('删除种类失败：$error');
+                        }
+                      },
+                    ),
+                  ),
+                TextButton.icon(
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('新建种类'),
+                  onPressed: () async {
+                    final controller = TextEditingController();
+                    final name = await showDialog<String>(
+                      context: dialogContext,
+                      builder: (context) => AlertDialog(
+                        title: const Text('新建商品种类'),
+                        content: TextField(
+                          controller: controller,
+                          maxLength: 20,
+                          autofocus: true,
+                          decoration: const InputDecoration(
+                            hintText: '例如：文具、零食',
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('取消'),
+                          ),
+                          FilledButton(
+                            onPressed: () =>
+                                Navigator.pop(context, controller.text),
+                            child: const Text('保存'),
+                          ),
+                        ],
+                      ),
+                    );
+                    controller.dispose();
+                    if (name == null) return;
                     try {
-                      await _customShopApi.deleteCategory(category);
+                      await _customShopApi.createCategory(name);
                       await _loadCustom();
                       if (dialogContext.mounted) updateDialog(() {});
                     } catch (error) {
-                      _showMessage('删除种类失败：$error');
+                      _showMessage('新增种类失败：$error');
                     }
-                  })),
-            TextButton.icon(
-              icon: const Icon(Icons.add_rounded), label: const Text('新建种类'),
-              onPressed: () async {
-                final controller = TextEditingController();
-                final name = await showDialog<String>(context: dialogContext,
-                  builder: (context) => AlertDialog(
-                    title: const Text('新建商品种类'),
-                    content: TextField(controller: controller, maxLength: 20,
-                      autofocus: true,
-                      decoration: const InputDecoration(hintText: '例如：文具、零食')),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(context),
-                        child: const Text('取消')),
-                      FilledButton(onPressed: () => Navigator.pop(context, controller.text),
-                        child: const Text('保存')),
-                    ],
-                  ),
-                );
-                controller.dispose();
-                if (name == null) return;
-                try {
-                  await _customShopApi.createCategory(name);
-                  await _loadCustom();
-                  if (dialogContext.mounted) updateDialog(() {});
-                } catch (error) {
-                  _showMessage('新增种类失败：$error');
-                }
-              },
+                  },
+                ),
+              ],
             ),
-          ])),
-        actions: [TextButton(onPressed: () => Navigator.pop(dialogContext),
-          child: const Text('完成'))],
-      )),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('完成'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _customTile(CustomProduct product) => SurfaceCard(
-    child: Column(children: [
-      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        CustomProductPicture(product: product, size: 64),
-        const SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(product.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 3),
-          Text(product.description.isEmpty ? '暂无描述' : product.description,
-            maxLines: 2, overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, color: AppColors.muted)),
-          const SizedBox(height: 4),
-          Text('${product.priceCoin} 金币 · 库存 ${product.stock} · '
-               '${product.categoryName} · ${product.kind == 'CONSUMABLE' ? '可使用' : '收藏品'}',
-            style: const TextStyle(fontSize: 12, color: AppColors.forest)),
-        ])),
-        PopupMenuButton<String>(tooltip: '管理商品',
-          onSelected: (choice) {
-            if (choice == 'edit') _openCustomEditor(product);
-            if (choice == 'archive') _archiveCustom(product);
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'edit', child: Text('编辑商品')),
-            PopupMenuItem(value: 'archive', child: Text('下架商品')),
-          ]),
-      ]),
-      const SizedBox(height: 8),
-      SizedBox(width: double.infinity, child: FilledButton.tonalIcon(
-        onPressed: product.stock > 0 && !_buyingCustom
-          ? () => _purchaseCustom(product) : null,
-        icon: const Icon(Icons.shopping_bag_outlined, size: 18),
-        label: Text(_buyingCustom && _buyingCustomProductId == product.id
-          ? '购买中…' : product.stock <= 0 ? '已售罄' : '购买'),
-      )),
-    ]),
+    child: Column(
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CustomProductPicture(product: product, size: 64),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    product.name,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    product.description.isEmpty ? '暂无描述' : product.description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${product.priceCoin} 金币 · 库存 ${product.stock} · '
+                    '${product.categoryName} · ${product.kind == 'CONSUMABLE' ? '可使用' : '收藏品'}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.forest,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            PopupMenuButton<String>(
+              tooltip: '管理商品',
+              onSelected: (choice) {
+                if (choice == 'edit') _openCustomEditor(product);
+                if (choice == 'archive') _archiveCustom(product);
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'edit', child: Text('编辑商品')),
+                PopupMenuItem(value: 'archive', child: Text('下架商品')),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.tonalIcon(
+            onPressed: product.stock > 0 && !_buyingCustom
+                ? () => _purchaseCustom(product)
+                : null,
+            icon: const Icon(Icons.shopping_bag_outlined, size: 18),
+            label: Text(
+              _buyingCustom && _buyingCustomProductId == product.id
+                  ? '购买中…'
+                  : product.stock <= 0
+                  ? '已售罄'
+                  : '购买',
+            ),
+          ),
+        ),
+      ],
+    ),
   );
 
   Future<void> _load() async {
@@ -396,9 +521,11 @@ class _StorePageState extends State<StorePage> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text(isRetry ? '重试上次开盒' : '确认开启${box.name}'),
-        content: Text(isRetry
-            ? '将使用相同请求编号再次查询/提交，不会创建新的一笔购买。'
-            : '本次需要消耗 ${box.priceCoin} 金币，奖励由本地奖励池随机决定。'),
+        content: Text(
+          isRetry
+              ? '将使用相同请求编号再次查询/提交，不会创建新的一笔购买。'
+              : '本次需要消耗 ${box.priceCoin} 金币，奖励由本地奖励池随机决定。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -449,8 +576,10 @@ class _StorePageState extends State<StorePage> {
       if (!mounted) return;
       await _showReward(result);
     } else {
-      _showMessage('开盒结果未确认：${failureMessage ?? '请求异常'}。'
-          '再次点击同一商品会复用请求编号，请勿创建新的购买。');
+      _showMessage(
+        '开盒结果未确认：${failureMessage ?? '请求异常'}。'
+        '再次点击同一商品会复用请求编号，请勿创建新的购买。',
+      );
     }
   }
 
@@ -458,8 +587,9 @@ class _StorePageState extends State<StorePage> {
     if (result.rewardType == 'COLLECTIBLE' && result.itemName != null) {
       // 查询本地库存，用于区分首次解锁和重复获得。
       // 查询失败不影响已成功的开盒，只降级显示通用收藏提示。
-      final ownedCount = await _getOwnedCountAfter(result)
-          .timeout(const Duration(seconds: 3), onTimeout: () => null);
+      final ownedCount = await _getOwnedCountAfter(
+        result,
+      ).timeout(const Duration(seconds: 3), onTimeout: () => null);
       if (!mounted) return;
 
       final isDuplicate =
@@ -470,8 +600,9 @@ class _StorePageState extends State<StorePage> {
       await showDialog<void>(
         context: context,
         builder: (context) => Dialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
           child: SingleChildScrollView(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
@@ -502,8 +633,8 @@ class _StorePageState extends State<StorePage> {
                     ownedCount == null
                         ? '收藏品获得成功！'
                         : isDuplicate
-                            ? '重复获得！'
-                            : '新收藏解锁！',
+                        ? '重复获得！'
+                        : '新收藏解锁！',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 21,
@@ -561,9 +692,13 @@ class _StorePageState extends State<StorePage> {
                     const SizedBox(height: 7),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 11, vertical: 5),
+                        horizontal: 11,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
-                        color: _rarityColor(result.itemRarity!).withValues(alpha: 0.12),
+                        color: _rarityColor(
+                          result.itemRarity!,
+                        ).withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
@@ -618,24 +753,31 @@ class _StorePageState extends State<StorePage> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('本次消耗',
-                          style: TextStyle(color: AppColors.muted)),
-                      Text('${result.priceCoin} 金币',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700)),
+                      const Text(
+                        '本次消耗',
+                        style: TextStyle(color: AppColors.muted),
+                      ),
+                      Text(
+                        '${result.priceCoin} 金币',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 7),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('剩余金币',
-                          style: TextStyle(color: AppColors.muted)),
-                      Text('${result.balance.coin}',
-                          style: const TextStyle(
-                            color: AppColors.forest,
-                            fontWeight: FontWeight.w900,
-                          )),
+                      const Text(
+                        '剩余金币',
+                        style: TextStyle(color: AppColors.muted),
+                      ),
+                      Text(
+                        '${result.balance.coin}',
+                        style: const TextStyle(
+                          color: AppColors.forest,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 17),
@@ -662,17 +804,25 @@ class _StorePageState extends State<StorePage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.card_giftcard_rounded,
-                size: 58, color: AppColors.forest),
+            const Icon(
+              Icons.card_giftcard_rounded,
+              size: 58,
+              color: AppColors.forest,
+            ),
             const SizedBox(height: 12),
-            Text(result.boxName,
-                style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(
+              result.boxName,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 9),
-            Text('+${result.rewardAmount} ${_assetLabel(result.rewardType)}',
-                style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.forest)),
+            Text(
+              '+${result.rewardAmount} ${_assetLabel(result.rewardType)}',
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: AppColors.forest,
+              ),
+            ),
             const SizedBox(height: 8),
             Text('本次消耗 ${result.priceCoin} 金币'),
             Text('剩余金币 ${result.balance.coin}'),
@@ -759,55 +909,99 @@ class _StorePageState extends State<StorePage> {
         ],
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButton: Column(mainAxisSize: MainAxisSize.min, children: [
-        FloatingActionButton.small(
-          heroTag: 'custom-shop-warehouse', tooltip: '仓库',
-          onPressed: _openWarehouse,
-          child: const Icon(Icons.inventory_2_outlined),
-        ),
-        const SizedBox(height: 12),
-        FloatingActionButton(
-          heroTag: 'custom-shop-create', tooltip: '新建商品',
-          onPressed: () => _openCustomEditor(),
-          child: const Icon(Icons.add_rounded),
-        ),
-      ]),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'custom-shop-warehouse',
+            tooltip: '仓库',
+            onPressed: _openWarehouse,
+            child: const Icon(Icons.inventory_2_outlined),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton(
+            heroTag: 'custom-shop-create',
+            tooltip: '新建商品',
+            onPressed: () => _openCustomEditor(),
+            child: const Icon(Icons.add_rounded),
+          ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: _refreshAll,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 125),
           children: [
-            Row(children: [
-              const Expanded(child: Text('商品', style: TextStyle(
-                fontSize: 21, fontWeight: FontWeight.w800, color: AppColors.ink))),
-              const Icon(Icons.monetization_on_rounded, color: AppColors.amber, size: 22),
-              const SizedBox(width: 5),
-              Text('${_balance?.coin ?? '—'}', style: const TextStyle(
-                color: AppColors.ink, fontSize: 17, fontWeight: FontWeight.w800)),
-            ]),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '商品',
+                    style: TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                ),
+                const Icon(
+                  Icons.monetization_on_rounded,
+                  color: AppColors.amber,
+                  size: 22,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  '${_balance?.coin ?? '—'}',
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 9),
-            Row(children: [
-              const Expanded(child: Text('商品种类',
-                style: TextStyle(fontSize: 12, color: AppColors.muted))),
-              TextButton.icon(onPressed: _manageCategories,
-                icon: const Icon(Icons.tune_rounded, size: 17),
-                label: const Text('管理种类')),
-            ]),
-            SingleChildScrollView(scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (final category in ['全部', '默认', ..._categories])
-                  Padding(padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(showCheckmark: false, label: Text(category),
-                      selected: _customFilter == category,
-                      onSelected: (_) => setState(() => _customFilter = category))),
-              ])),
-            if (_loading && _balance == null)
-              const LinearProgressIndicator(),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '商品种类',
+                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _manageCategories,
+                  icon: const Icon(Icons.tune_rounded, size: 17),
+                  label: const Text('管理种类'),
+                ),
+              ],
+            ),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final category in ['全部', '默认', ..._categories])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        showCheckmark: false,
+                        label: Text(category),
+                        selected: _customFilter == category,
+                        onSelected: (_) =>
+                            setState(() => _customFilter = category),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (_loading && _balance == null) const LinearProgressIndicator(),
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text('刷新失败：$_error',
-                  style: const TextStyle(color: AppColors.rose)),
+              Text(
+                '刷新失败：$_error',
+                style: const TextStyle(color: AppColors.rose),
+              ),
             ],
             if (_pendingRequestId != null) ...[
               const SizedBox(height: 12),
@@ -815,11 +1009,15 @@ class _StorePageState extends State<StorePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('有一笔尚未确认的开盒请求',
-                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    const Text(
+                      '有一笔尚未确认的开盒请求',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
                     const SizedBox(height: 6),
-                    const Text('请先核对历史，或再次点击原商品重试。'
-                        '不会为该次重试生成新的请求编号。'),
+                    const Text(
+                      '请先核对历史，或再次点击原商品重试。'
+                      '不会为该次重试生成新的请求编号。',
+                    ),
                     TextButton(
                       onPressed: _opening ? null : _load,
                       child: const Text('刷新历史并核对'),
@@ -831,9 +1029,14 @@ class _StorePageState extends State<StorePage> {
             const SizedBox(height: 14),
             if (_loadingCustom) const LinearProgressIndicator(),
             if (_customError != null)
-              Text('商品加载失败：$_customError',
-                style: const TextStyle(color: AppColors.rose)),
-            if (_boxes.isEmpty && _customProducts.isEmpty && !_loading && !_loadingCustom)
+              Text(
+                '商品加载失败：$_customError',
+                style: const TextStyle(color: AppColors.rose),
+              ),
+            if (_boxes.isEmpty &&
+                _customProducts.isEmpty &&
+                !_loading &&
+                !_loadingCustom)
               const SurfaceCard(child: Text('暂无商品，点击右下角 + 创建')),
             // 盲盒与自定义商品共用「商品」分区；种类是用户自定义筛选，
             // 消耗品/收藏品仅表示购买后能否使用，不作为种类。
@@ -843,7 +1046,8 @@ class _StorePageState extends State<StorePage> {
                 const SizedBox(height: 11),
               ],
             for (final product in _customProducts)
-              if (_customFilter == '全部' || product.categoryName == _customFilter) ...[
+              if (_customFilter == '全部' ||
+                  product.categoryName == _customFilter) ...[
                 _customTile(product),
                 const SizedBox(height: 10),
               ],
@@ -857,44 +1061,62 @@ class _StorePageState extends State<StorePage> {
     final blockedByAnotherPending =
         _pendingRequestId != null && _pendingBoxId != box.id;
     final canAfford = _balance != null && _balance!.coin >= box.priceCoin;
-    final enabled = !_opening && !_loading && !blockedByAnotherPending &&
+    final enabled =
+        !_opening &&
+        !_loading &&
+        !blockedByAnotherPending &&
         (canAfford || _pendingBoxId == box.id);
     final isRetry = _pendingRequestId != null && _pendingBoxId == box.id;
     return SurfaceCard(
-      child: Row(children: [
-        Container(
-          width: 52,
-          height: 52,
-          decoration: BoxDecoration(
-            color: AppColors.paleGreen,
-            borderRadius: BorderRadius.circular(12),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: AppColors.paleGreen,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.inventory_2_outlined,
+              color: AppColors.forest,
+              size: 29,
+            ),
           ),
-          child: const Icon(Icons.inventory_2_outlined,
-              color: AppColors.forest, size: 29),
-        ),
-        const SizedBox(width: 12),
-        Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(box.name,
-                style: const TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 4),
-            Text(box.description,
-                style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-            Text('${box.priceCoin} 金币 / 次',
-                style: const TextStyle(color: AppColors.forest, fontSize: 12)),
-          ],
-        )),
-        const SizedBox(width: 8),
-        FilledButton(
-          onPressed: enabled ? () => _openBox(box) : null,
-          child: Text(_opening && _openingBoxId == box.id
-              ? '开盒中'
-              : isRetry
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  box.name,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  box.description,
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+                Text(
+                  '${box.priceCoin} 金币 / 次',
+                  style: const TextStyle(color: AppColors.forest, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: enabled ? () => _openBox(box) : null,
+            child: Text(
+              _opening && _openingBoxId == box.id
+                  ? '开盒中'
+                  : isRetry
                   ? '重试'
-                  : '开启'),
-        ),
-      ]),
+                  : '开启',
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

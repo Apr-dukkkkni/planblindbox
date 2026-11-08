@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:mods;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+mod:
+  admin-token: test-only-token
+
+# 仅供测试环境使用的独立、固定密钥，绝不能用于生产。
+# 否则 @SpringBootTest 在 JwtConfig / PasswordResetService 初始化时会失败。
+auth:
+  jwt:
+    secret-base64: cGxhbmJsaW5kYm94LWp3dC10ZXN0LXNlY3JldC1kby1ub3QtZGVwbG95LTIwMjY=
+    issuer: planblindbox
+    audience: planblindbox-api
+    ttl-seconds: 7200
+  reset:
+    hmac-secret-base64: cGxhbmJsaW5kYm94LXJlc2V0LXRlc3Qtc2VjcmV0LWRvLW5vdC1kZXBsb3ktMjAyNg==
