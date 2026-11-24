@@ -1,0 +1,20 @@
+backend:
+  name: Java Backend
+  runs-on: ubuntu-latest
+
+  defaults:
+    run:
+      working-directory: mod-server
+
+  steps:
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
+        cache: maven
+        cache-dependency-path: mod-server/pom.xml
+
+    - name: Build and test
+      run: mvn -B -ntp clean verify
