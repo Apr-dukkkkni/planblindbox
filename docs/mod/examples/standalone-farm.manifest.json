@@ -1,0 +1,71 @@
+{
+  "manifestVersion": 1,
+  "id": "com.example.farm",
+  "version": "1.0.0",
+  "name": {
+    "zh-CN": "我的农场",
+    "en-US": "My Farm"
+  },
+  "description": "独立运行的农场养成应用",
+  "publisher": {
+    "id": "publisher.example"
+  },
+  "type": "app",
+  "runtime": {
+    "type": "web",
+    "apiVersion": "1",
+    "entrypoint": "web/index.html"
+  },
+  "securityProfile": "standalone_networked",
+  "compatibility": {
+    "hostApi": "^1.0.0",
+    "platforms": [
+      "android",
+      "web"
+    ]
+  },
+  "ui": {
+    "allowedModes": [
+      "full_screen",
+      "modal"
+    ],
+    "defaultMode": "full_screen"
+  },
+  "storage": {
+    "local": {
+      "enabled": true,
+      "quotaMiB": 50,
+      "persistent": true
+    }
+  },
+  "permissions": [
+    {
+      "capability": "storage.local",
+      "required": true,
+      "reason": "保存农场自己的游戏进度"
+    },
+    {
+      "capability": "network.fetch",
+      "required": false,
+      "reason": "同步 MOD 自己的游戏进度",
+      "scope": {
+        "domains": [
+          "api.farm.example"
+        ],
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "pathPrefixes": [
+          "/v1/"
+        ],
+        "maxRequestsPerMinute": 30,
+        "maxResponseBytes": 1048576
+      }
+    }
+  ],
+  "dependencies": [],
+  "assets": {
+    "icon": "assets/icons/app.png"
+  }
+}

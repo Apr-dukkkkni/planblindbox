@@ -1,0 +1,57 @@
+{
+  "manifestVersion": 1,
+  "id": "com.example.diary-insight",
+  "version": "1.0.0",
+  "name": {
+    "zh-CN": "本地日记分析"
+  },
+  "description": "仅在设备本地分析经用户授权的日记",
+  "publisher": {
+    "id": "publisher.example"
+  },
+  "type": "app",
+  "runtime": {
+    "type": "web",
+    "apiVersion": "1",
+    "entrypoint": "web/index.html"
+  },
+  "securityProfile": "host_integrated_local",
+  "compatibility": {
+    "hostApi": "^1.0.0",
+    "platforms": [
+      "android"
+    ]
+  },
+  "ui": {
+    "allowedModes": [
+      "full_screen"
+    ],
+    "defaultMode": "full_screen"
+  },
+  "storage": {
+    "local": {
+      "enabled": true,
+      "quotaMiB": 10,
+      "persistent": true
+    }
+  },
+  "permissions": [
+    {
+      "capability": "host.data.diary.read",
+      "required": false,
+      "reason": "在本机分析用户主动授权的日记",
+      "scope": {
+        "fields": [
+          "date",
+          "content",
+          "mood"
+        ],
+        "maxRecordsPerRequest": 30
+      }
+    }
+  ],
+  "dependencies": [],
+  "assets": {
+    "icon": "assets/icons/app.png"
+  }
+}

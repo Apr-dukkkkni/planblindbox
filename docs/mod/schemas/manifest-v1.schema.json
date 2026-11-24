@@ -1,0 +1,534 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:planblindbox:mod:manifest-v1",
+  "title": "PlanBlindBox MOD Manifest V1 (Draft)",
+  "description": "Draft 0.1. Cross-field security-profile constraints require semantic validation in addition to JSON Schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestVersion",
+    "id",
+    "version",
+    "name",
+    "publisher",
+    "type",
+    "runtime",
+    "securityProfile",
+    "compatibility",
+    "ui",
+    "storage",
+    "permissions"
+  ],
+  "properties": {
+    "manifestVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 100,
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+$"
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "name": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 10,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 60
+      }
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 100,
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+$"
+        }
+      }
+    },
+    "type": {
+      "enum": [
+        "content",
+        "app"
+      ]
+    },
+    "contentKind": {
+      "enum": [
+        "task_template",
+        "theme",
+        "shop_resource_pack",
+        "reward_rules",
+        "link_hub"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "apiVersion",
+        "entrypoint"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "declarative",
+            "web",
+            "wasm"
+          ]
+        },
+        "apiVersion": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9]+$"
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        }
+      }
+    },
+    "securityProfile": {
+      "enum": [
+        "standalone_networked",
+        "host_integrated_local",
+        "host_write_only"
+      ]
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hostApi",
+        "platforms"
+      ],
+      "properties": {
+        "hostApi": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "android",
+              "ios",
+              "web",
+              "windows",
+              "macos",
+              "linux"
+            ]
+          }
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowedModes",
+        "defaultMode"
+      ],
+      "properties": {
+        "allowedModes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "full_screen",
+              "modal",
+              "overlay"
+            ]
+          }
+        },
+        "defaultMode": {
+          "enum": [
+            "full_screen",
+            "modal",
+            "overlay"
+          ]
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "local"
+      ],
+      "properties": {
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "quotaMiB",
+            "persistent"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "quotaMiB": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2048
+            },
+            "persistent": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "capability",
+          "required",
+          "reason"
+        ],
+        "properties": {
+          "capability": {
+            "enum": [
+              "storage.local",
+              "storage.files",
+              "network.fetch",
+              "host.data.tasks.read",
+              "host.data.habits.read",
+              "host.data.checkins.read",
+              "host.data.time_records.read",
+              "host.data.diary.read",
+              "host.data.mood.read",
+              "host.tasks.create",
+              "host.tasks.update_limited",
+              "host.habits.create",
+              "host.habits.check_in",
+              "host.external_link.open",
+              "host.ui.notification",
+              "host.ui.home_widget",
+              "mods.message.send",
+              "mods.message.subscribe"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "domains": {
+                "type": "array",
+                "maxItems": 20,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "maxLength": 253
+                }
+              },
+              "methods": {
+                "type": "array",
+                "maxItems": 8,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "GET",
+                    "HEAD",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE"
+                  ]
+                }
+              },
+              "pathPrefixes": {
+                "type": "array",
+                "maxItems": 30,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "maxLength": 240
+                }
+              },
+              "fields": {
+                "type": "array",
+                "maxItems": 50,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "maxLength": 80
+                }
+              },
+              "maxRecordsPerRequest": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              },
+              "maxRequestsPerMinute": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600
+              },
+              "maxRequestBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10485760
+              },
+              "maxResponseBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10485760
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 60000
+              },
+              "operations": {
+                "type": "array",
+                "maxItems": 20,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "maxLength": 80
+                }
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "capability": {
+                  "const": "network.fetch"
+                }
+              },
+              "required": [
+                "capability"
+              ]
+            },
+            "then": {
+              "required": [
+                "scope"
+              ],
+              "properties": {
+                "scope": {
+                  "required": [
+                    "domains",
+                    "methods",
+                    "pathPrefixes"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "capability": {
+                  "enum": [
+                    "host.data.tasks.read",
+                    "host.data.habits.read",
+                    "host.data.checkins.read",
+                    "host.data.time_records.read",
+                    "host.data.diary.read",
+                    "host.data.mood.read"
+                  ]
+                }
+              },
+              "required": [
+                "capability"
+              ]
+            },
+            "then": {
+              "required": [
+                "scope"
+              ],
+              "properties": {
+                "scope": {
+                  "required": [
+                    "fields",
+                    "maxRecordsPerRequest"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "versionRange"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 100,
+            "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+$"
+          },
+          "versionRange": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "optional": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "icon": {
+          "type": "string",
+          "maxLength": 240
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "content"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "contentKind"
+        ],
+        "properties": {
+          "runtime": {
+            "properties": {
+              "type": {
+                "const": "declarative"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "required": [
+            "contentKind"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "securityProfile": {
+            "const": "standalone_networked"
+          }
+        },
+        "required": [
+          "securityProfile"
+        ]
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "capability": {
+                    "enum": [
+                      "host.data.tasks.read",
+                      "host.data.habits.read",
+                      "host.data.checkins.read",
+                      "host.data.time_records.read",
+                      "host.data.diary.read",
+                      "host.data.mood.read"
+                    ]
+                  }
+                },
+                "required": [
+                  "capability"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "securityProfile": {
+            "const": "host_integrated_local"
+          }
+        },
+        "required": [
+          "securityProfile"
+        ]
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "capability": {
+                    "const": "network.fetch"
+                  }
+                },
+                "required": [
+                  "capability"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

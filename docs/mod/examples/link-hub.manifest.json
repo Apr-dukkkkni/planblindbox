@@ -1,0 +1,52 @@
+{
+  "manifestVersion": 1,
+  "id": "com.example.linkhub",
+  "version": "1.0.0",
+  "name": {
+    "zh-CN": "快捷入口"
+  },
+  "description": "用户主动点击后打开已配置的网页或应用链接",
+  "publisher": {
+    "id": "publisher.example"
+  },
+  "type": "content",
+  "contentKind": "link_hub",
+  "runtime": {
+    "type": "declarative",
+    "apiVersion": "1",
+    "entrypoint": "content/link-hub.json"
+  },
+  "securityProfile": "standalone_networked",
+  "compatibility": {
+    "hostApi": "^1.0.0",
+    "platforms": [
+      "android",
+      "web"
+    ]
+  },
+  "ui": {
+    "allowedModes": [
+      "full_screen",
+      "modal"
+    ],
+    "defaultMode": "full_screen"
+  },
+  "storage": {
+    "local": {
+      "enabled": false,
+      "quotaMiB": 0,
+      "persistent": false
+    }
+  },
+  "permissions": [
+    {
+      "capability": "host.external_link.open",
+      "required": false,
+      "reason": "仅在用户点击快捷入口时打开目标链接"
+    }
+  ],
+  "dependencies": [],
+  "assets": {
+    "icon": "assets/icons/app.png"
+  }
+}
