@@ -1,0 +1,93 @@
+{
+  "format": "planblindbox-manifest-v1-conformance",
+  "formatVersion": 1,
+  "valid": [
+    {
+      "id": "standalone-farm",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.farm\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"我的农场\",\"en-US\":\"My Farm\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":true,\"quotaMiB\":50,\"persistent\":true}},\"permissions\":[{\"capability\":\"storage.local\",\"required\":true,\"reason\":\"保存农场自己的游戏进度\"},{\"capability\":\"network.fetch\",\"required\":false,\"reason\":\"同步 MOD 自己的游戏进度\",\"scope\":{\"domains\":[\"api.farm.example\"],\"methods\":[\"GET\",\"POST\"],\"pathPrefixes\":[\"/v1/\"],\"maxRequestsPerMinute\":30,\"maxResponseBytes\":1048576}}],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}"
+    },
+    {
+      "id": "integrated-offline",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.diary-insight\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"本地日记分析\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":true,\"quotaMiB\":10,\"persistent\":true}},\"permissions\":[{\"capability\":\"storage.local\",\"required\":true,\"reason\":\"在本机保存用户的分析设置\"},{\"capability\":\"host.data.diary.read\",\"required\":false,\"reason\":\"在本机分析用户主动授权的日记\",\"scope\":{\"fields\":[\"date\",\"content\",\"mood\"],\"maxRecordsPerRequest\":30}}],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}"
+    },
+    {
+      "id": "link-hub",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.linkhub\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"快捷入口\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"content\",\"runtime\":{\"type\":\"declarative\",\"apiVersion\":\"1\",\"entrypoint\":\"content/link-hub.json\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[{\"capability\":\"host.external_link.open\",\"required\":false,\"reason\":\"仅在用户点击快捷入口时打开目标链接\"}],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"},\"contentKind\":\"link_hub\"}"
+    },
+    {
+      "id": "task-template",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.reading-template\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"阅读任务模板\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"content\",\"runtime\":{\"type\":\"declarative\",\"apiVersion\":\"1\",\"entrypoint\":\"content/task-templates.json\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[{\"capability\":\"host.tasks.create\",\"required\":true,\"reason\":\"用户选择模板后创建任务\"}],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"},\"contentKind\":\"task_template\"}"
+    },
+    {
+      "id": "standalone-offline",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.offline\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}"
+    }
+  ],
+  "invalid": [
+    {
+      "id": "legacy-schema-version",
+      "raw": "{\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"},\"schemaVersion\":1}",
+      "reason": "旧 schemaVersion 不属于 Manifest V1"
+    },
+    {
+      "id": "developer-controlled-profile",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"},\"securityProfile\":\"standalone_networked\"}",
+      "reason": "Manifest 不得声明 securityProfile"
+    },
+    {
+      "id": "host-api-with-network",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[{\"capability\":\"host.tasks.create\",\"required\":false,\"reason\":\"创建任务\"},{\"capability\":\"network.fetch\",\"required\":false,\"reason\":\"同步自己的数据\",\"scope\":{\"domains\":[\"api.example.com\"],\"methods\":[\"GET\"],\"pathPrefixes\":[\"/v1/\"]}}],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "宿主业务 API 与外发能力互斥，即使 required=false 也拒绝"
+    },
+    {
+      "id": "duplicate-capability",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":true,\"quotaMiB\":1,\"persistent\":true}},\"permissions\":[{\"capability\":\"storage.local\",\"required\":true,\"reason\":\"保存数据\"},{\"capability\":\"storage.local\",\"required\":false,\"reason\":\"重复声明\"}],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "同一 capability 不能重复声明"
+    },
+    {
+      "id": "default-ui-mode-not-allowed",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "defaultMode 必须在 allowedModes 中"
+    },
+    {
+      "id": "unsafe-entrypoint",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/../outside.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "entrypoint 不得路径穿越"
+    },
+    {
+      "id": "network-without-scope",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[{\"capability\":\"network.fetch\",\"required\":false,\"reason\":\"同步数据\"}],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "network.fetch 必须声明 domains/methods/pathPrefixes"
+    },
+    {
+      "id": "semver-leading-zero-prerelease",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0-01\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "SemVer 数字预发布标识符不得有前导零"
+    },
+    {
+      "id": "task-template-without-capability",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"content\",\"runtime\":{\"type\":\"declarative\",\"apiVersion\":\"1\",\"entrypoint\":\"content/tasks.json\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"},\"contentKind\":\"task_template\"}",
+      "reason": "task_template 必须声明 host.tasks.create"
+    },
+    {
+      "id": "storage-capability-mismatch",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":true,\"quotaMiB\":10,\"persistent\":true}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "启用本地存储必须声明 storage.local"
+    },
+    {
+      "id": "invalid-host-api-range",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"latest\",\"platforms\":[\"android\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"}}",
+      "reason": "V1 range 仅接受精确版本、^ 和 ~ SemVer"
+    },
+    {
+      "id": "legacy-task-templates-field",
+      "raw": "{\"manifestVersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"zh-CN\":\"示例扩展\",\"en-US\":\"Sample Extension\"},\"description\":\"Manifest V1 conformance fixture\",\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\",\"web\"]},\"ui\":{\"allowedModes\":[\"full_screen\",\"modal\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[],\"dependencies\":[],\"assets\":{\"icon\":\"assets/icons/app.png\"},\"taskTemplates\":[]}",
+      "reason": "任务模板内容不再放在 Manifest 顶层"
+    },
+    {
+      "id": "duplicate-json-key",
+      "raw": "{\"manifestVersion\":1,\"manifest\\u0056ersion\":1,\"id\":\"com.example.sample\",\"version\":\"1.0.0\",\"name\":{\"en-US\":\"Sample\"},\"publisher\":{\"id\":\"publisher.example\"},\"type\":\"app\",\"runtime\":{\"type\":\"web\",\"apiVersion\":\"1\",\"entrypoint\":\"web/index.html\"},\"compatibility\":{\"hostApi\":\"^1.0.0\",\"platforms\":[\"android\"]},\"ui\":{\"allowedModes\":[\"full_screen\"],\"defaultMode\":\"full_screen\"},\"storage\":{\"local\":{\"enabled\":false,\"quotaMiB\":0,\"persistent\":false}},\"permissions\":[]} ",
+      "reason": "重复 JSON 对象键必须拒绝"
+    }
+  ]
+}
