@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'auth_api.dart';
 import '../services/private_sync_vault.dart';
+import '../mod_platform/runtime/mod_runtime_session.dart';
 
 enum LoginState { loading, guest, signedIn, offline }
 
@@ -23,6 +24,7 @@ class AuthSession extends ChangeNotifier {
   bool get isSignedIn => state == LoginState.signedIn;
 
   Future<void> restore() async {
+    ModRuntimeSessionManager.instance.terminateAll();
     state = LoginState.loading; notifyListeners();
     try {
       _accessToken = await storage.read(key: 'pbb_access_token');
@@ -57,6 +59,7 @@ class AuthSession extends ChangeNotifier {
   }
 
   Future<void> login(String email, String password) async {
+    ModRuntimeSessionManager.instance.terminateAll();
     final data = await api.login(email, password);
     await storage.write(key: 'pbb_access_token', value: data.accessToken);
     _accessToken = data.accessToken;
@@ -129,6 +132,7 @@ class AuthSession extends ChangeNotifier {
   }
 
   Future<void> _clearLocal() async {
+    ModRuntimeSessionManager.instance.terminateAll();
     PrivateSyncVault.instance.lock();
     await storage.delete(key: 'pbb_access_token');
     await storage.delete(key: 'pbb_last_user_id');

@@ -284,8 +284,9 @@ class CoreSyncStore {
         ORDER BY o.rowid LIMIT 1''',
         [userId],
       );
-      if (existing.isNotEmpty)
+      if (existing.isNotEmpty) {
         return CorePendingMutation.fromRow(existing.first);
+      }
       final privateUnlocked = PrivateSyncVault.instance.unlocked(userId);
       final dirty = await txn.rawQuery(
         '''SELECT d.* FROM core_sync_dirty d

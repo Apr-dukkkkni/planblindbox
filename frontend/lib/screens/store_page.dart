@@ -278,11 +278,12 @@ class _StorePageState extends State<StorePage> {
     } catch (error) {
       _showMessage('购买结果尚未确认：$error。重试该商品时会复用请求编号');
     } finally {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _buyingCustom = false;
           _buyingCustomProductId = null;
         });
+      }
     }
   }
 

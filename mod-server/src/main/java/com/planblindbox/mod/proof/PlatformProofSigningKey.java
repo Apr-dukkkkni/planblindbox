@@ -107,6 +107,31 @@ public final class PlatformProofSigningKey {
         }
     }
 
+    /** Verify a platform proof with ACTIVE or VERIFY_ONLY keys; REVOKED keys are never trusted. */
+    public boolean verify(String requestedKeyId, byte[] signingInput, byte[] signedBytes) {
+        if (requestedKeyId == null || requestedKeyId.isBlank() || signingInput == null || signedBytes == null) {
+            return false;
+        }
+        KeyMaterial material = keys.get(requestedKeyId.toLowerCase(Locale.ROOT));
+        if (material == null || material.status().equals("REVOKED")) {
+            return false;
+        }
+        try {
+            Signature verifier = Signature.getInstance("Ed25519");
+            verifier.initVerify(material.publicKey());
+            verifier.update(signingInput);
+            return verifier.verify(signedBytes);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public String keyStatus(String requestedKeyId) {
+        if (requestedKeyId == null || requestedKeyId.isBlank()) return null;
+        KeyMaterial material = keys.get(requestedKeyId.toLowerCase(Locale.ROOT));
+        return material == null ? null : material.status();
+    }
+
     /** Returns one public key. VERIFY_ONLY keys remain available for validation of unexpired old proofs. */
     public Map<String, Object> publicMetadata(String requestedKeyId) {
         if (requestedKeyId == null || requestedKeyId.isBlank()) {

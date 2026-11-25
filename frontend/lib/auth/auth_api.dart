@@ -89,8 +89,9 @@ class AuthApi {
     final uri = Uri.tryParse(url);
     if (uri == null) return null;
     if (uri.hasScheme && uri.scheme == 'https') return uri.toString();
-    if (uri.hasScheme)
+    if (uri.hasScheme) {
       return null; // Do not render insecure or arbitrary schemes.
+    }
     return _uri(url.startsWith('/') ? url : '/$url').toString();
   }
 

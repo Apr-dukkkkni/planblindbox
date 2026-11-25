@@ -30,7 +30,8 @@ class ModRuntimeInstance {
 /// network client, WebView or WASM runtime.
 ///
 /// Creating a runtime session is NOT permission approval. Host calls continue
-/// through ModCapabilityBroker, which defaults to DenyAllModApprovalProvider.
+/// through ModCapabilityBroker. Production host surfaces inject the online
+/// platform-proof provider; the broker itself still defaults to deny-all.
 class ModRuntimeManager {
   ModRuntimeManager.forRepository(
     LocalPlanRepository repository, {
@@ -132,6 +133,7 @@ class ModRuntimeManager {
       ownerId: _store.ownerId,
       installationId: definition.installationId,
       modId: definition.modId,
+      verifiedRuntime: true,
     );
     final instance = ModRuntimeInstance._(definition, session);
     _active[definition.installationId] = instance;
@@ -213,6 +215,7 @@ class ModRuntimeManager {
       ownerId: _store.ownerId,
       installationId: instance.installationId,
       modId: instance.modId,
+      verifiedRuntime: true,
     );
     instance._state = ModExecutionState.running;
   }

@@ -28,6 +28,11 @@ class LocalPlanRepository {
   }
 
   final LocalDatabase _localDatabase;
+  /// Exposes the provider, not a raw database handle, to isolated feature stores.
+  LocalDatabase get localDatabase => _localDatabase;
+  /// MOD owner partition mirrors the guest isolation used by the private vault.
+  int get modOwnerId => userId == 1 ? -1 : userId;
+
   final DateTime Function() _clock;
   final Random _random = Random.secure();
 
@@ -69,6 +74,9 @@ class LocalPlanRepository {
     'custom_inventory',
     'custom_purchase_records',
     'custom_use_records',
+    'mod_storage_metadata',
+    'mod_storage_entries',
+    'mod_installations',
     'app_settings',
     'core_sync_rescue',
   ];
@@ -99,6 +107,9 @@ class LocalPlanRepository {
     'asset_records',
     'daily_sign_ins',
     'user_assets',
+    'mod_storage_entries',
+    'mod_storage_metadata',
+    'mod_installations',
     'app_settings',
     'core_sync_rescue',
   ];
@@ -129,6 +140,9 @@ class LocalPlanRepository {
     'custom_inventory',
     'custom_purchase_records',
     'custom_use_records',
+    'mod_storage_metadata',
+    'mod_storage_entries',
+    'mod_installations',
     'app_settings',
     'core_sync_rescue',
   ];
@@ -585,6 +599,146 @@ class LocalPlanRepository {
     });
   }
 
+  /// Narrow Host API used only by the MOD Capability Broker.
+  /// The installation and user grant are rechecked inside the same SQLite
+  /// transaction as the task insert, so a concurrent revoke/disable cannot
+  /// slip between authorization and the write.
+  Future<void> createTaskFromMod({
+    required String installationId,
+    required String modId,
+    required bool Function() isSessionActive,
+    required String title,
+    required String note,
+    required int targetCount,
+    required int importance,
+    required int difficulty,
+  }) async {
+    if (title.trim().isEmpty || title.trim().length > 100) {
+      throw ApiException('任务名称必须为 1～100 个字符', statusCode: 400);
+    }
+    if (note.length > 500) {
+      throw ApiException('任务备注不能超过 500 个字符', statusCode: 400);
+    }
+    if (targetCount < 1 || targetCount > 999) {
+      throw ApiException('目标数量必须在 1～999 之间', statusCode: 400);
+    }
+    _validateLevel(importance, '重要程度');
+    _validateLevel(difficulty, '难度');
+
+    final db = await _db;
+    await ensureReady();
+    final now = DateTime.now();
+    final deadline = _nextReset(now);
+    final modOwner = modOwnerId;
+
+    await db.transaction((txn) async {
+      final installations = await txn.query(
+        'mod_installations',
+        columns: ['manifest_json'],
+        where: '''installation_id=? AND owner_id=? AND mod_id=?
+                  AND status=? AND enabled=1 AND effective_profile=?''',
+        whereArgs: [
+          installationId,
+          modOwner,
+          modId,
+          'installed',
+          'host_integrated_offline',
+        ],
+        limit: 1,
+      );
+      if (installations.isEmpty) {
+        throw StateError('MOD 安装状态或安全 Profile 已变化');
+      }
+      if (!isSessionActive()) throw StateError('Runtime Session 已失效');
+      final globalSetting = await txn.query(
+        'app_settings',
+        columns: ['setting_value'],
+        where: 'setting_key=?',
+        whereArgs: ['mods.enabled.v1'],
+        limit: 1,
+      );
+      if (globalSetting.isNotEmpty &&
+          globalSetting.first['setting_value'] == 'false') {
+        throw StateError('MOD 功能已关闭');
+      }
+
+      final grants = await txn.query(
+        'mod_permission_grants',
+        columns: ['grant_id'],
+        where: '''installation_id=? AND capability IN (?,?) AND revoked_at IS NULL''',
+        whereArgs: [installationId, 'host.tasks.create', 'tasks.create'],
+        limit: 1,
+      );
+      if (grants.isEmpty) throw StateError('MOD 未获准创建任务');
+
+      final manifest = jsonDecode(
+        installations.first['manifest_json']! as String,
+      );
+      if (manifest is! Map || manifest['id'] != modId) {
+        throw StateError('MOD Manifest 身份与安装记录不一致');
+      }
+      final permissions = manifest['permissions'];
+      final declared = permissions is List && permissions.any((item) {
+        if (item == 'tasks.create') return true; // Transitional V0 adapter.
+        return item is Map && item['capability'] == 'host.tasks.create';
+      });
+      if (!declared) throw StateError('Manifest 未声明 host.tasks.create');
+      final templates = manifest['taskTemplates'];
+      final matchingTemplate = templates is List && templates.any((item) {
+        if (item is! Map) return false;
+        return item['title'] == title.trim() &&
+            (item['note'] ?? '').toString().trim() == note.trim() &&
+            item['targetCount'] == targetCount &&
+            item['importance'] == importance &&
+            item['difficulty'] == difficulty;
+      });
+      if (!matchingTemplate) {
+        throw StateError('请求内容不属于此 MOD 声明的任务模板');
+      }
+
+      await txn.insert('tasks', {
+        'user_id': userId,
+        'category_id': null,
+        'title': title.trim(),
+        'note': note.trim().isEmpty ? null : note.trim(),
+        'start_time': _dateTime(now),
+        'end_time': _dateTime(deadline),
+        'target_count': targetCount,
+        'recurrence_type': 'ONCE',
+        'status': 'PENDING',
+        'importance': importance,
+        'urgency': 3,
+        'difficulty': difficulty,
+        'priority_score': importance * difficulty,
+        'record_rule': jsonEncode(const {'mode': 'DEFAULT'}),
+        'create_time': _dateTime(now),
+        'update_time': _dateTime(now),
+      });
+
+      // Metadata-only audit. Never store the task title, note or request body.
+      await txn.insert('mod_audit_events', {
+        'owner_id': modOwner,
+        'installation_id': installationId,
+        'mod_id': modId,
+        'action': 'capability_invoke',
+        'capability': 'host.tasks.create',
+        'result': 'success',
+        'created_at': _dateTime(now),
+        'detail_json': '{}',
+      });
+      await txn.rawDelete(
+        '''DELETE FROM mod_audit_events WHERE owner_id=? AND event_id NOT IN (
+             SELECT event_id FROM mod_audit_events
+             WHERE owner_id=? ORDER BY event_id DESC LIMIT 500
+           )''',
+        [modOwner, modOwner],
+      );
+      // A logout, disable or revoke that happens during SQLite awaits causes
+      // the whole transaction (including the task insert) to roll back.
+      if (!isSessionActive()) throw StateError('Runtime Session 已失效');
+    });
+  }
+
   Future<void> updateTask({
     required int taskId,
     required String title,
@@ -688,8 +842,9 @@ class LocalPlanRepository {
     if (rule == null) return;
     final mode = rule['mode'];
     if (mode == 'DEFAULT' || mode == 'MANUAL') {
-      if (rule.length != 1)
+      if (rule.length != 1) {
         throw ApiException('$mode 模式只允许 mode 字段', statusCode: 400);
+      }
       return;
     }
     if (mode == 'FIXED' &&
@@ -705,8 +860,9 @@ class LocalPlanRepository {
     required int taskId,
     required int actualCount,
   }) async {
-    if (actualCount <= 0)
+    if (actualCount <= 0) {
       throw ApiException('actualCount 必须为正整数', statusCode: 400);
+    }
     final db = await _db;
     return db.transaction((txn) async {
       final rows = await txn.query(
@@ -733,8 +889,9 @@ class LocalPlanRepository {
         [taskId],
       );
       final before = _int(totalRows.first['total']);
-      if (before >= target)
+      if (before >= target) {
         throw ApiException('历史数量已达到目标，请检查任务状态', statusCode: 409);
+      }
       final increment = min(actualCount, target - before).toInt();
       final after = before + increment;
       final completed = after == target;
@@ -910,8 +1067,9 @@ class LocalPlanRepository {
       limit: 1,
     );
     if (rows.isEmpty) throw ApiException('习惯不存在', statusCode: 404);
-    if (rows.first['status'] == 'ARCHIVED')
+    if (rows.first['status'] == 'ARCHIVED') {
       throw ApiException('已归档习惯不能修改', statusCode: 409);
+    }
     await db.update(
       'habits',
       {
@@ -937,8 +1095,9 @@ class LocalPlanRepository {
       final days = rule['daysOfWeek'];
       if (days is List &&
           days.isNotEmpty &&
-          days.every((d) => d is int && d >= 1 && d <= 7))
+          days.every((d) => d is int && d >= 1 && d <= 7)) {
         return;
+      }
     }
     throw ApiException('习惯重复规则不合法', statusCode: 400);
   }
@@ -947,10 +1106,12 @@ class LocalPlanRepository {
     final start = DateTime.tryParse(habit['start_date']?.toString() ?? '');
     final end = DateTime.tryParse(habit['end_date']?.toString() ?? '');
     if (start == null ||
-        date.isBefore(DateTime(start.year, start.month, start.day)))
+        date.isBefore(DateTime(start.year, start.month, start.day))) {
       return false;
-    if (end != null && date.isAfter(DateTime(end.year, end.month, end.day)))
+    }
+    if (end != null && date.isAfter(DateTime(end.year, end.month, end.day))) {
       return false;
+    }
     final ruleText = habit['repeat_rule']?.toString() ?? '{"type":"DAILY"}';
     final rule = jsonDecode(ruleText) as Map<String, dynamic>;
     if (rule['type'] == 'DAILY') return true;
@@ -1011,8 +1172,9 @@ class LocalPlanRepository {
       );
       if (rows.isEmpty) throw ApiException('习惯不存在', statusCode: 404);
       final habit = Map<String, Object?>.from(rows.first);
-      if (habit['status'] != 'ACTIVE')
+      if (habit['status'] != 'ACTIVE') {
         throw ApiException('仅 ACTIVE 习惯可打卡', statusCode: 409);
+      }
       final now = DateTime.now();
       final today = _businessDate(now);
       if (!_isHabitScheduled(habit, today)) {
@@ -1323,8 +1485,9 @@ class LocalPlanRepository {
   Future<Map<String, dynamic>> getShopBalance() async => _assets(await _db);
 
   Future<List<Map<String, dynamic>>> getShopHistory({int limit = 20}) async {
-    if (limit < 1 || limit > 100)
+    if (limit < 1 || limit > 100) {
       throw ApiException('limit 必须在 1~100 之间', statusCode: 400);
+    }
     final db = await _db;
     final rows = await db.query(
       'shop_open_records',
@@ -1614,8 +1777,9 @@ class LocalPlanRepository {
   // ---------------------------------------------------------------------------
 
   Future<Map<String, dynamic>> getStats({int days = 7}) async {
-    if (days != 7 && days != 30)
+    if (days != 7 && days != 30) {
       throw ApiException('统计周期只支持 7 天或 30 天', statusCode: 400);
+    }
     final db = await _db;
     final endDate = _businessDate(DateTime.now());
     final startDate = endDate.subtract(Duration(days: days - 1));
@@ -1661,8 +1825,9 @@ class LocalPlanRepository {
       if (created == null) continue;
       final business = _date(_businessDate(created));
       if (business.compareTo(_date(startDate)) < 0 ||
-          business.compareTo(_date(endDate)) > 0)
+          business.compareTo(_date(endDate)) > 0) {
         continue;
+      }
       final bucket = assetsByDay.putIfAbsent(
         business,
         () => {
@@ -1920,8 +2085,9 @@ class LocalPlanRepository {
       final id = _int(task['task_id']);
       final record = taskRecordMap[id];
       if (record == null &&
-          !_isTaskScheduledForBusinessDay(task, dayStart, dayEnd))
+          !_isTaskScheduledForBusinessDay(task, dayStart, dayEnd)) {
         continue;
+      }
       final status =
           record?['status']?.toString() ??
           task['status']?.toString() ??
@@ -1965,8 +2131,9 @@ class LocalPlanRepository {
       final id = _int(habit['habit_id']);
       final record = habitRecordMap[id];
       if (record == null &&
-          (habit['status'] == 'ARCHIVED' || !_isHabitScheduled(habit, parsed)))
+          (habit['status'] == 'ARCHIVED' || !_isHabitScheduled(habit, parsed))) {
         continue;
+      }
       habits.add({
         'habitId': id,
         'name': habit['name'],
@@ -2071,10 +2238,12 @@ class LocalPlanRepository {
     if (title.trim().isEmpty || category.trim().isEmpty) {
       throw ApiException('时间记录名称和分类不能为空', statusCode: 400);
     }
-    if (!endTime.isAfter(startTime))
+    if (!endTime.isAfter(startTime)) {
       throw ApiException('结束时间必须晚于开始时间', statusCode: 400);
-    if (endTime.isAfter(DateTime.now()))
+    }
+    if (endTime.isAfter(DateTime.now())) {
       throw ApiException('时间记录不能包含未来时间', statusCode: 400);
+    }
     final startBusiness = _businessDate(startTime);
     final endBusiness = _businessDate(
       endTime.subtract(const Duration(microseconds: 1)),
@@ -2170,8 +2339,22 @@ class LocalPlanRepository {
           'SELECT r.* FROM habit_records r JOIN habits h ON r.habit_id=h.habit_id WHERE h.user_id=?',
           [userId],
         ),
-        // 本地手动备份包含设备偏好和 Mod 注册表；认证凭据不存放在此表。
-        'app_settings' => await db.query('app_settings'),
+        // Host-integrated offline MOD storage is not exported: it may contain
+        // data read from the host. Standalone MOD data remains user-backup data.
+        'mod_storage_entries' => await db.rawQuery(
+          '''SELECT e.* FROM mod_storage_entries e
+             JOIN mod_storage_metadata m
+               ON m.owner_id=e.owner_id AND m.storage_namespace=e.storage_namespace
+             WHERE e.owner_id=? AND m.effective_profile != ?''',
+          [modOwnerId, 'host_integrated_offline'],
+        ),
+        'mod_storage_metadata' => await _exportModStorageMetadata(db),
+        // Device preferences remain exportable; the legacy MOD registry is not.
+        'app_settings' => await db.query(
+          'app_settings',
+          where: 'setting_key NOT LIKE ?',
+          whereArgs: ['mods.registry.%'],
+        ),
         _ => await _exportTableForAccount(db, table),
       };
       tables[table] = rows
@@ -2188,10 +2371,32 @@ class LocalPlanRepository {
     });
   }
 
+  Future<List<Map<String, Object?>>> _exportModStorageMetadata(
+    Database db,
+  ) async {
+    final rows = await db.query(
+      'mod_storage_metadata',
+      where: 'owner_id=?',
+      whereArgs: [modOwnerId],
+    );
+    return rows.map((source) {
+      final row = Map<String, Object?>.from(source);
+      if (row['effective_profile'] == 'host_integrated_offline') {
+        // Corresponding storage entries are intentionally omitted.
+        row['used_bytes'] = 0;
+      }
+      return row;
+    }).toList();
+  }
+
   Future<List<Map<String, Object?>>> _exportTableForAccount(
     Database db,
     String table,
   ) async {
+    final cols = await db.rawQuery('PRAGMA table_info($table)');
+    if (cols.any((col) => col['name'] == 'owner_id')) {
+      return db.query(table, where: 'owner_id=?', whereArgs: [modOwnerId]);
+    }
     if (table == 'core_sync_rescue') {
       final rows = await db.query(
         table,
@@ -2202,7 +2407,6 @@ class LocalPlanRepository {
           .map((item) => Map<String, Object?>.from(item)..remove('rescue_id'))
           .toList();
     }
-    final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((col) => col['name'] == 'user_id')) {
       return db.query(
         table,
@@ -2240,32 +2444,39 @@ class LocalPlanRepository {
     final restoreLegacyV1 =
         backupDatabaseVersion == 1 &&
         currentDatabaseVersion >= 4 &&
-        currentDatabaseVersion <= 7;
+        currentDatabaseVersion <= 8;
     final restoreLegacyV2 =
         backupDatabaseVersion == 2 &&
         currentDatabaseVersion >= 4 &&
-        currentDatabaseVersion <= 7;
+        currentDatabaseVersion <= 8;
     final restoreLegacyV3 =
         backupDatabaseVersion == 3 &&
         currentDatabaseVersion >= 4 &&
-        currentDatabaseVersion <= 7;
+        currentDatabaseVersion <= 8;
     final restoreLegacyV4 =
         backupDatabaseVersion == 4 &&
         (currentDatabaseVersion == 5 ||
             currentDatabaseVersion == 6 ||
-            currentDatabaseVersion == 7);
+            currentDatabaseVersion == 7 ||
+            currentDatabaseVersion == 8);
     final restoreLegacyV5 =
         backupDatabaseVersion == 5 &&
-        (currentDatabaseVersion == 6 || currentDatabaseVersion == 7);
+        (currentDatabaseVersion == 6 ||
+            currentDatabaseVersion == 7 ||
+            currentDatabaseVersion == 8);
     final restoreLegacyV6 =
-        backupDatabaseVersion == 6 && currentDatabaseVersion == 7;
+        backupDatabaseVersion == 6 &&
+        (currentDatabaseVersion == 7 || currentDatabaseVersion == 8);
+    final restoreLegacyV7 =
+        backupDatabaseVersion == 7 && currentDatabaseVersion == 8;
     if (backupDatabaseVersion != currentDatabaseVersion &&
         !restoreLegacyV1 &&
         !restoreLegacyV2 &&
         !restoreLegacyV3 &&
         !restoreLegacyV4 &&
         !restoreLegacyV5 &&
-        !restoreLegacyV6) {
+        !restoreLegacyV6 &&
+        !restoreLegacyV7) {
       throw ApiException(
         '备份数据库版本为 $backupDatabaseVersion，当前版本为 $currentDatabaseVersion，暂不支持跨版本恢复',
         statusCode: 400,
@@ -2287,6 +2498,12 @@ class LocalPlanRepository {
                   restoreLegacyV6) &&
               table == 'core_sync_rescue') &&
           !(backupDatabaseVersion < 7 && table == 'private_vault_records') &&
+          !(backupDatabaseVersion < 8 &&
+              const {
+                'mod_storage_metadata',
+                'mod_storage_entries',
+                'mod_installations',
+              }.contains(table)) &&
           !((restoreLegacyV1 || restoreLegacyV2) &&
               table == 'custom_product_categories') &&
           !((restoreLegacyV1 ||
@@ -2311,8 +2528,9 @@ class LocalPlanRepository {
           .toSet();
       final rows = <Map<String, Object?>>[];
       for (final rawRow in (rawRows is List ? rawRows : const [])) {
-        if (rawRow is! Map)
+        if (rawRow is! Map) {
           throw ApiException('数据表 $table 中存在无效记录', statusCode: 400);
+        }
         final row = <String, Object?>{};
         for (final entry in rawRow.entries) {
           final key = entry.key.toString();
@@ -2323,16 +2541,49 @@ class LocalPlanRepository {
         }
         rows.add(row);
       }
+      if (table == 'app_settings') {
+        rows.removeWhere(
+          (row) => (row['setting_key']?.toString() ?? '').startsWith('mods.registry.'),
+        );
+      }
       for (final row in rows) {
         if (row.containsKey('user_id') &&
             _int(row['user_id'], -99999999) != _ownerForTable(table)) {
           throw ApiException('备份内存在其他账号的数据：$table', statusCode: 403);
+        }
+        if (row.containsKey('owner_id') &&
+            _int(row['owner_id'], -99999999) != modOwnerId) {
+          throw ApiException('备份内存在其他账号的 MOD 数据：$table', statusCode: 403);
+        }
+        if (table == 'mod_installations') {
+          row['installation_id'] = _newUuidV4();
+          row['enabled'] = 0;
+          row['status'] = 'requires_reauthorization';
+        }
+        if (table == 'mod_storage_metadata') {
+          row['retained'] = 1;
         }
       }
       prepared[table] = rows;
     }
 
     await db.transaction((txn) async {
+      // Grants and audit events are deliberately not restored from backups.
+      await txn.delete(
+        'mod_permission_grants',
+        where: 'installation_id IN (SELECT installation_id FROM mod_installations WHERE owner_id=?)',
+        whereArgs: [modOwnerId],
+      );
+      await txn.delete(
+        'mod_audit_events',
+        where: 'owner_id=?',
+        whereArgs: [modOwnerId],
+      );
+      await txn.delete(
+        'app_settings',
+        where: 'setting_key LIKE ?',
+        whereArgs: ['mods.registry.%'],
+      );
       // 关系表没有 user_id，必须使用父记录的 user_id 过滤。
       await txn.rawDelete(
         'DELETE FROM task_records WHERE task_id IN (SELECT task_id FROM tasks WHERE user_id=?)',
@@ -2367,6 +2618,14 @@ class LocalPlanRepository {
           if (prepared[table]!.isNotEmpty) {
             await txn.delete('app_settings');
           }
+          continue;
+        }
+        if (const {
+          'mod_storage_entries',
+          'mod_storage_metadata',
+          'mod_installations',
+        }.contains(table)) {
+          await txn.delete(table, where: 'owner_id=?', whereArgs: [modOwnerId]);
           continue;
         }
         await txn.delete(
@@ -2416,6 +2675,15 @@ class LocalPlanRepository {
     });
   }
 
+  String _newUuidV4() {
+    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
   /// 清空个人业务数据并重新初始化资产、默认分类。
   /// 静态盲盒目录和收藏品内容包保留，避免重置后商店无法使用。
   /// 仅清除当前账号的本地数据，不影响同一设备上的其他账号。
@@ -2462,6 +2730,17 @@ class LocalPlanRepository {
           whereArgs: [_ownerForTable(table)],
         );
       }
+      // MOD data belongs to this local account. Deleting metadata cascades to
+      // MOD storage entries, installations and their permission grants.
+      await txn.delete('mod_storage_metadata', where: 'owner_id=?', whereArgs: [modOwnerId]);
+      await txn.delete('mod_installations', where: 'owner_id=?', whereArgs: [modOwnerId]);
+      await txn.delete('mod_audit_events', where: 'owner_id=?', whereArgs: [modOwnerId]);
+      await txn.delete(
+        'app_settings',
+        where: 'setting_key LIKE ?',
+        whereArgs: ['mods.registry.%'],
+      );
+
       // Preferences are device-scoped. Clear them only when the caller explicitly
       // requests a preferences reset; otherwise preserve them across data reset.
       if (resetPreferences) {

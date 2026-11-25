@@ -67,7 +67,69 @@ class ModCapabilityProofServiceTest {
         assertTrue(claims.path("adminApproved").asBoolean());
         assertTrue(claims.path("userGranted").asBoolean());
         assertTrue(claims.path("packageEnabled").asBoolean());
+        assertEquals(1L, claims.path("approvalRevision").asLong());
+        assertEquals(1L, claims.path("grantRevision").asLong());
+        assertEquals(1L, claims.path("packageRevision").asLong());
         verify(publisherKeys).verifyManifest("publisher.example", "b".repeat(64), "signature", RAW);
+    }
+
+    @Test
+    void verifiesProofAgainstCurrentAuthorizationAndExactResourceContext() {
+        when(authorization.userStatus(USER_ID, MOD_ID, VERSION, CAPABILITY)).thenReturn(effectiveStatus());
+        when(jdbc.queryForMap(anyString(), eq(MOD_ID), eq(VERSION))).thenReturn(Map.of(
+                "manifest_json", RAW, "publisher_key_id", "b".repeat(64), "publisher_signature", "signature"));
+        String token = (String) service.issue(USER_ID, MOD_ID, VERSION, CAPABILITY).get("token");
+
+        Map<String, Object> verified = service.verify(USER_ID, token, MOD_ID, VERSION, CAPABILITY);
+        assertEquals(true, verified.get("active"));
+        assertEquals(MOD_ID, verified.get("modId"));
+        assertEquals(VERSION, verified.get("version"));
+        assertEquals(CAPABILITY, verified.get("capability"));
+        verify(publisherKeys, times(2)).verifyManifest("publisher.example", "b".repeat(64), "signature", RAW);
+    }
+
+    @Test
+    void refusesProofForAnotherUserOrDifferentModVersionOrCapability() {
+        when(authorization.userStatus(USER_ID, MOD_ID, VERSION, CAPABILITY)).thenReturn(effectiveStatus());
+        when(jdbc.queryForMap(anyString(), eq(MOD_ID), eq(VERSION))).thenReturn(Map.of(
+                "manifest_json", RAW, "publisher_key_id", "b".repeat(64), "publisher_signature", "signature"));
+        String token = (String) service.issue(USER_ID, MOD_ID, VERSION, CAPABILITY).get("token");
+
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+                () -> service.verify(USER_ID + 1, token, MOD_ID, VERSION, CAPABILITY)).getStatusCode());
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+                () -> service.verify(USER_ID, token, MOD_ID, "2.0.0", CAPABILITY)).getStatusCode());
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+                () -> service.verify(USER_ID, token, MOD_ID, VERSION, "host.other.action")).getStatusCode());
+    }
+
+    @Test
+    void refusesOldProofAfterAuthorizationRevisionChangesEvenIfGrantIsRestored() {
+        when(authorization.userStatus(USER_ID, MOD_ID, VERSION, CAPABILITY)).thenReturn(effectiveStatus());
+        when(jdbc.queryForMap(anyString(), eq(MOD_ID), eq(VERSION))).thenReturn(Map.of(
+                "manifest_json", RAW, "publisher_key_id", "b".repeat(64), "publisher_signature", "signature"));
+        String token = (String) service.issue(USER_ID, MOD_ID, VERSION, CAPABILITY).get("token");
+
+        Map<String, Object> restored = new java.util.LinkedHashMap<>(effectiveStatus());
+        restored.put("grantRevision", 3L);
+        when(authorization.userStatus(USER_ID, MOD_ID, VERSION, CAPABILITY)).thenReturn(restored);
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.verify(USER_ID, token, MOD_ID, VERSION, CAPABILITY));
+        assertEquals(HttpStatus.FORBIDDEN, error.getStatusCode());
+    }
+
+    @Test
+    void refusesOldProofAfterPublisherKeyRevocation() {
+        when(authorization.userStatus(USER_ID, MOD_ID, VERSION, CAPABILITY)).thenReturn(effectiveStatus());
+        when(jdbc.queryForMap(anyString(), eq(MOD_ID), eq(VERSION))).thenReturn(Map.of(
+                "manifest_json", RAW, "publisher_key_id", "b".repeat(64), "publisher_signature", "signature"));
+        String token = (String) service.issue(USER_ID, MOD_ID, VERSION, CAPABILITY).get("token");
+        doThrow(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Publisher key revoked"))
+                .when(publisherKeys).verifyManifest("publisher.example", "b".repeat(64), "signature", RAW);
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.verify(USER_ID, token, MOD_ID, VERSION, CAPABILITY));
+        assertEquals(HttpStatus.UNAUTHORIZED, error.getStatusCode());
     }
 
     @Test
@@ -134,16 +196,20 @@ class ModCapabilityProofServiceTest {
     }
 
     private static Map<String, Object> effectiveStatus() {
-        return Map.of(
-                "modId", MOD_ID,
-                "version", VERSION,
-                "publisherId", "publisher.example",
-                "manifestSha256", ManifestIntegrity.sha256(RAW),
-                "capability", CAPABILITY,
-                "adminApproved", true,
-                "userGranted", true,
-                "packageEnabled", true,
-                "effective", true);
+        return Map.<String, Object>ofEntries(
+                Map.entry("modId", MOD_ID),
+                Map.entry("version", VERSION),
+                Map.entry("publisherId", "publisher.example"),
+                Map.entry("manifestSha256", ManifestIntegrity.sha256(RAW)),
+                Map.entry("capability", CAPABILITY),
+                Map.entry("adminApproved", true),
+                Map.entry("userGranted", true),
+                Map.entry("packageEnabled", true),
+                Map.entry("approvalRevision", 1L),
+                Map.entry("grantRevision", 1L),
+                Map.entry("packageRevision", 1L),
+                Map.entry("effective", true)
+        );
     }
 
     private static JsonNode decodePayload(String token) throws Exception {

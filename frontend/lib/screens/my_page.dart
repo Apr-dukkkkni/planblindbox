@@ -96,8 +96,9 @@ class _MyPageState extends State<MyPage> {
       final data = await widget.auth.api.getWaterStatus(token);
       if (!mounted ||
           sequence != _requestSequence ||
-          widget.auth.token != token)
+          widget.auth.token != token) {
         return;
+      }
       setState(() => _serverWater = (data['waterBalance'] as num).toInt());
     } catch (_) {
       if (!mounted || sequence != _requestSequence) return;
@@ -571,7 +572,10 @@ class _MyPageState extends State<MyPage> {
     Navigator.of(context)
         .push(
           MaterialPageRoute<void>(
-            builder: (_) => SettingsPage(api: widget.api),
+            builder: (_) => SettingsPage(
+              api: widget.api,
+              auth: widget.auth,
+            ),
           ),
         )
         .then((_) {

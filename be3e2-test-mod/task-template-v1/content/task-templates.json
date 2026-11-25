@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "templates": [
+    {
+      "title": "BE-3E-2 联调任务",
+      "note": "用此任务核验用户授权与撤权对 Host API 的影响",
+      "targetCount": 1,
+      "importance": 3,
+      "difficulty": 1
+    }
+  ]
+}

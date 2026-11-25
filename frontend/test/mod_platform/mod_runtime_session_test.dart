@@ -60,4 +60,22 @@ void main() {
     manager.terminateAll();
     expect(manager.isActive(accountTwo), isFalse);
   });
+  test('只有 Host Declarative Runtime 创建的 Session 才带有 verifiedRuntime 标记', () {
+    final manager = ModRuntimeSessionManager();
+    final unverified = manager.open(
+      ownerId: 1,
+      installationId: 'install-v1',
+      modId: 'com.example.v1',
+    );
+    expect(unverified.verifiedRuntime, isFalse);
+
+    final verified = manager.open(
+      ownerId: 1,
+      installationId: 'install-v1',
+      modId: 'com.example.v1',
+      verifiedRuntime: true,
+    );
+    expect(verified.verifiedRuntime, isTrue);
+  });
+
 }

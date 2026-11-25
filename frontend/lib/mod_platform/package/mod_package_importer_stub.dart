@@ -15,3 +15,11 @@ Future<void> deleteV1PackageDirectory({
   required String modId,
   required String packageDirectory,
 }) async {}
+
+
+Future<ModValidatedPackage> loadV1PackageContents({
+  required int ownerId,
+  required Map<String, dynamic> installation,
+}) => Future<ModValidatedPackage>.error(
+  UnsupportedError('当前平台暂不支持读取 ZIP 内容包'),
+);

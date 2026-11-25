@@ -10,22 +10,6 @@ import 'mod_package_models.dart';
 import 'mod_package_validator.dart';
 import 'mod_package_zip_preflight.dart';
 
-class ModPackageInstallResult {
-  const ModPackageInstallResult({
-    required this.modId,
-    required this.version,
-    required this.installDirectory,
-    required this.archiveSha256,
-    required this.package,
-  });
-
-  final String modId;
-  final String version;
-  final Directory installDirectory;
-  final String archiveSha256;
-  final ModValidatedPackage package;
-}
-
 /// Installs declarative task-template ZIP packages into a caller-owned root.
 /// The ZIP is validated fully before the current installation is replaced.
 /// No permissions are granted and no MOD code is executed by this class.
@@ -45,9 +29,15 @@ class ModPackageInstaller {
   final ModPackageZipPreflight _preflight;
   final Random _random;
 
-  Future<ModPackageInstallResult> installBytes(List<int> archiveBytes) async {
-    if (archiveBytes.length > ModPackageLimits.maxArchiveBytes) {
-      throw const FormatException('ZIP 文件超过 50 MiB');
+  /// Validates a ZIP without writing anything. Import flows use this to show
+  /// package metadata and check registry policy before replacing installed files.
+  ModValidatedPackage validateBytes(List<int> archiveBytes) =>
+      _decodeAndValidate(archiveBytes).package;
+
+  ({Map<String, List<int>> files, ModValidatedPackage package})
+      _decodeAndValidate(List<int> archiveBytes) {
+    if (archiveBytes.isEmpty || archiveBytes.length > ModPackageLimits.maxArchiveBytes) {
+      throw const FormatException('ZIP 文件为空或超过 50 MiB');
     }
     final bytes = archiveBytes is Uint8List
         ? archiveBytes
@@ -87,8 +77,16 @@ class ModPackageInstaller {
             .containsAll(expectedFileNames)) {
       throw const FormatException('ZIP 解码结果与中央目录文件清单不一致');
     }
+    return (files: files, package: _validator.validate(files));
+  }
 
-    final validated = _validator.validate(files);
+  Future<ModPackageInstallResult> installBytes(List<int> archiveBytes) async {
+    final decoded = _decodeAndValidate(archiveBytes);
+    final files = decoded.files;
+    final validated = decoded.package;
+    final bytes = archiveBytes is Uint8List
+        ? archiveBytes
+        : Uint8List.fromList(archiveBytes);
     final manifest = validated.manifest;
     final modId = manifest['id'] as String;
     final version = manifest['version'] as String;
@@ -158,7 +156,7 @@ class ModPackageInstaller {
       return ModPackageInstallResult(
         modId: modId,
         version: version,
-        installDirectory: target,
+        installDirectoryPath: target.path,
         archiveSha256: archiveSha256,
         package: validated,
       );

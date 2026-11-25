@@ -69,7 +69,7 @@ class LocalDatabase {
     return factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 7,
+        version: 8,
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) await _createCustomShopSchema(db);
           if (oldVersion < 3) await _upgradeProductCategories(db);
@@ -77,6 +77,7 @@ class LocalDatabase {
           if (oldVersion < 5) await _createCoreSyncSchema(db);
           if (oldVersion < 6) await _createPrivateSyncSchema(db);
           if (oldVersion < 7) await _createPrivateVaultSchema(db);
+          if (oldVersion < 8) await _createModPlatformSchema(db);
         },
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
@@ -337,6 +338,116 @@ class LocalDatabase {
     await _createCoreSyncSchema(db);
     await _createPrivateSyncSchema(db);
     await _createPrivateVaultSchema(db);
+    await _createModPlatformSchema(db);
+  }
+
+  /// MOD 安装、授权、审计和私有存储元数据。所有记录均按 owner_id 隔离。
+  /// MOD 表不属于宿主 Core Sync 的同步白名单。
+  Future<void> _createModPlatformSchema(DatabaseExecutor db) async {
+    await db.execute('''CREATE TABLE IF NOT EXISTS mod_storage_metadata (
+      storage_namespace TEXT PRIMARY KEY,
+      owner_id INTEGER NOT NULL,
+      mod_id TEXT NOT NULL,
+      publisher_id TEXT NOT NULL,
+      effective_profile TEXT NOT NULL CHECK(
+        effective_profile IN (
+          'standalone_networked',
+          'standalone_offline',
+          'host_integrated_offline'
+        )
+      ),
+      quota_bytes INTEGER NOT NULL DEFAULT 0 CHECK(quota_bytes >= 0),
+      used_bytes INTEGER NOT NULL DEFAULT 0 CHECK(used_bytes >= 0),
+      data_format_version INTEGER NOT NULL DEFAULT 1,
+      retained INTEGER NOT NULL DEFAULT 0 CHECK(retained IN (0,1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(owner_id, storage_namespace)
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS mod_installations (
+      installation_id TEXT PRIMARY KEY,
+      owner_id INTEGER NOT NULL,
+      mod_id TEXT NOT NULL,
+      publisher_id TEXT NOT NULL,
+      version TEXT NOT NULL,
+      manifest_json TEXT NOT NULL,
+      package_sha256 TEXT,
+      effective_profile TEXT NOT NULL CHECK(
+        effective_profile IN (
+          'standalone_networked',
+          'standalone_offline',
+          'host_integrated_offline'
+        )
+      ),
+      status TEXT NOT NULL CHECK(
+        status IN ('installed','requires_reauthorization')
+      ),
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+      storage_namespace TEXT NOT NULL,
+      installed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(owner_id, mod_id),
+      FOREIGN KEY(owner_id, storage_namespace)
+        REFERENCES mod_storage_metadata(owner_id, storage_namespace)
+        ON DELETE CASCADE
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS mod_permission_grants (
+      grant_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      installation_id TEXT NOT NULL,
+      capability TEXT NOT NULL,
+      scope_json TEXT NOT NULL DEFAULT '{}',
+      granted_at TEXT NOT NULL,
+      revoked_at TEXT,
+      policy_version TEXT NOT NULL DEFAULT '1',
+      UNIQUE(installation_id, capability),
+      FOREIGN KEY(installation_id)
+        REFERENCES mod_installations(installation_id)
+        ON DELETE CASCADE
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS mod_storage_entries (
+      owner_id INTEGER NOT NULL,
+      storage_namespace TEXT NOT NULL,
+      entry_key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(storage_namespace, entry_key),
+      FOREIGN KEY(owner_id, storage_namespace)
+        REFERENCES mod_storage_metadata(owner_id, storage_namespace)
+        ON DELETE CASCADE
+    )''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS mod_audit_events (
+      event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_id INTEGER NOT NULL,
+      installation_id TEXT,
+      mod_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      capability TEXT,
+      result TEXT NOT NULL DEFAULT 'success',
+      created_at TEXT NOT NULL,
+      detail_json TEXT NOT NULL DEFAULT '{}'
+    )''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mod_installations_owner_status '
+      'ON mod_installations(owner_id,status,enabled)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mod_grants_installation '
+      'ON mod_permission_grants(installation_id,revoked_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mod_storage_owner '
+      'ON mod_storage_metadata(owner_id,mod_id,publisher_id,effective_profile,retained)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_mod_audit_owner_time '
+      'ON mod_audit_events(owner_id,created_at)',
+    );
+    // The legacy registry was device-global in app_settings and is no longer authoritative.
+    await db.delete(
+      'app_settings',
+      where: 'setting_key LIKE ?',
+      whereArgs: ['mods.registry.%'],
+    );
   }
 
   /// 仅新增同步元数据，绝不覆盖已有任务或习惯。

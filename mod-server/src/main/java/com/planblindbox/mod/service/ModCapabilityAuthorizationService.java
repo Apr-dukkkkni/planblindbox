@@ -63,7 +63,7 @@ public class ModCapabilityAuthorizationService {
             jdbc.update("INSERT INTO mod_capability_approval(mod_id,version,manifest_sha256,publisher_id,capability,approved,decision_reason,decided_by) VALUES (?,?,?,?,?,?,?,?)",
                     modId, version, p.hash, p.publisherId, capability, approved, safeReason, adminActor);
         } else {
-            jdbc.update("UPDATE mod_capability_approval SET publisher_id=?,approved=?,decision_reason=?,decided_by=?,updated_at=CURRENT_TIMESTAMP WHERE mod_id=? AND version=? AND manifest_sha256=? AND capability=?",
+            jdbc.update("UPDATE mod_capability_approval SET publisher_id=?,approved=?,decision_reason=?,decided_by=?,authorization_revision=authorization_revision+1,updated_at=CURRENT_TIMESTAMP WHERE mod_id=? AND version=? AND manifest_sha256=? AND capability=?",
                     p.publisherId, approved, safeReason, adminActor, modId, version, p.hash, capability);
         }
         jdbc.update("INSERT INTO mod_capability_approval_audit(mod_id,version,manifest_sha256,publisher_id,capability,approved,decision_reason,decided_by) VALUES (?,?,?,?,?,?,?,?)",
@@ -85,7 +85,7 @@ public class ModCapabilityAuthorizationService {
                     granted ? new java.sql.Timestamp(System.currentTimeMillis()) : null,
                     granted ? null : new java.sql.Timestamp(System.currentTimeMillis()));
         } else {
-            jdbc.update("UPDATE user_mod_capability_grant SET granted=?,granted_at=?,revoked_at=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND mod_id=? AND version=? AND manifest_sha256=? AND capability=?",
+            jdbc.update("UPDATE user_mod_capability_grant SET granted=?,granted_at=?,revoked_at=?,authorization_revision=authorization_revision+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND mod_id=? AND version=? AND manifest_sha256=? AND capability=?",
                     granted, granted ? new java.sql.Timestamp(System.currentTimeMillis()) : null,
                     granted ? null : new java.sql.Timestamp(System.currentTimeMillis()),
                     userId, modId, version, p.hash, capability);
@@ -99,19 +99,51 @@ public class ModCapabilityAuthorizationService {
     }
 
     private Map<String, Object> statusFor(Published p, String modId, String version, String capability, Long userId) {
-        Boolean approved = jdbc.query("SELECT approved FROM mod_capability_approval WHERE mod_id=? AND version=? AND manifest_sha256=? AND publisher_id=? AND capability=?",
-                rs -> rs.next() ? rs.getBoolean(1) : null, modId, version, p.hash, p.publisherId, capability);
-        Boolean granted = userId == null ? null : jdbc.query("SELECT granted FROM user_mod_capability_grant WHERE user_id=? AND mod_id=? AND version=? AND manifest_sha256=? AND capability=?",
-                rs -> rs.next() ? rs.getBoolean(1) : null, userId, modId, version, p.hash, capability);
-        boolean packageEnabled = Boolean.TRUE.equals(jdbc.query("SELECT enabled FROM mod_packages WHERE mod_id=?",
-                rs -> rs.next() ? rs.getBoolean(1) : null, modId));
+        List<Map<String, Object>> approvalRows = jdbc.queryForList("""
+                SELECT approved AS gate_value, authorization_revision AS gate_revision
+                FROM mod_capability_approval
+                WHERE mod_id=? AND version=? AND manifest_sha256=? AND publisher_id=? AND capability=?
+                """, modId, version, p.hash, p.publisherId, capability);
+        List<Map<String, Object>> grantRows = userId == null ? List.of() : jdbc.queryForList("""
+                SELECT granted AS gate_value, authorization_revision AS gate_revision
+                FROM user_mod_capability_grant
+                WHERE user_id=? AND mod_id=? AND version=? AND manifest_sha256=? AND capability=?
+                """, userId, modId, version, p.hash, capability);
+        List<Map<String, Object>> packageRows = jdbc.queryForList("""
+                SELECT enabled AS gate_value, authorization_revision AS gate_revision
+                FROM mod_packages WHERE mod_id=?
+                """, modId);
+
+        boolean approved = gateValue(approvalRows);
+        boolean granted = gateValue(grantRows);
+        boolean packageEnabled = gateValue(packageRows);
+        long approvalRevision = revision(approvalRows);
+        long grantRevision = revision(grantRows);
+        long packageRevision = revision(packageRows);
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("modId", modId); result.put("version", version); result.put("publisherId", p.publisherId);
         result.put("manifestSha256", p.hash); result.put("capability", capability);
-        result.put("adminApproved", Boolean.TRUE.equals(approved));
-        if (userId != null) result.put("userGranted", Boolean.TRUE.equals(granted));
+        result.put("adminApproved", approved);
+        if (userId != null) result.put("userGranted", granted);
         result.put("packageEnabled", packageEnabled);
-        result.put("effective", userId != null && Boolean.TRUE.equals(approved) && Boolean.TRUE.equals(granted) && packageEnabled);
+        result.put("approvalRevision", approvalRevision);
+        if (userId != null) result.put("grantRevision", grantRevision);
+        result.put("packageRevision", packageRevision);
+        result.put("effective", userId != null && approved && granted && packageEnabled);
         return result;
+    }
+
+    private static boolean gateValue(List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) return false;
+        Object value = rows.get(0).get("gate_value");
+        if (value instanceof Boolean bool) return bool;
+        return value instanceof Number number && number.intValue() != 0;
+    }
+
+    private static long revision(List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) return 0L;
+        Object value = rows.get(0).get("gate_revision");
+        return value instanceof Number number ? number.longValue() : 0L;
     }
 }

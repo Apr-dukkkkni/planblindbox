@@ -3,7 +3,7 @@ import 'dart:math';
 
 import 'package:sqflite/sqflite.dart';
 
-import '../../../data/local/local_database.dart';
+import '../../data/local/local_database.dart';
 
 /// Account-scoped persistence for MOD installation state, grants, audit and
 /// namespaced local data. This store never exposes the host database handle.
@@ -86,8 +86,12 @@ class ModPlatformStore {
       );
       result.add({
         ...Map<String, dynamic>.from(decoded),
+        'manifestJson': row['manifest_json'],
         'installationId': installationId,
+        'installedModId': row['mod_id'],
+        'installedVersion': row['version'],
         'publisherId': row['publisher_id'],
+        'packageSha256': row['package_sha256'],
         'effectiveProfile': row['effective_profile'],
         'storageNamespace': row['storage_namespace'],
         'status': row['status'],
@@ -161,6 +165,7 @@ class ModPlatformStore {
     String? packageSha256,
     int storageQuotaBytes = 0,
     String policyVersion = '1',
+    bool enabledAfterInstall = true,
   }) async {
     if (!profiles.contains(effectiveProfile)) {
       throw ArgumentError.value(effectiveProfile, 'effectiveProfile');
@@ -201,7 +206,7 @@ class ModPlatformStore {
       String installedAt;
 
       if (sameTrustDomain) {
-        final current = existing!;
+        final current = existing;
         installationId = current['installation_id']! as String;
         storageNamespace = current['storage_namespace']! as String;
         installedAt = current['installed_at']! as String;
@@ -286,7 +291,7 @@ class ModPlatformStore {
         'package_sha256': packageSha256,
         'effective_profile': effectiveProfile,
         'status': 'installed',
-        'enabled': 1,
+        'enabled': enabledAfterInstall ? 1 : 0,
         'storage_namespace': storageNamespace,
         'installed_at': installedAt,
         'updated_at': _now(),
@@ -324,6 +329,29 @@ class ModPlatformStore {
     });
   }
 
+  /// Records only capability metadata. Request payloads and host data are never logged.
+  Future<void> recordCapabilityInvocation({
+    required String modId,
+    required String installationId,
+    required String capability,
+    required String result,
+  }) async {
+    if (!const {'success', 'denied', 'error'}.contains(result)) {
+      throw ArgumentError.value(result, 'result');
+    }
+    final db = await _db;
+    await db.transaction((txn) async {
+      await _audit(
+        txn,
+        modId: modId,
+        installationId: installationId,
+        action: 'capability_invoke',
+        capability: capability,
+        result: result,
+      );
+    });
+  }
+
   Future<void> setEnabled(String modId, bool enabled) async {
     final db = await _db;
     await db.transaction((txn) async {
@@ -350,6 +378,70 @@ class ModPlatformStore {
     });
   }
 
+  /// Records an explicit user authorization for one declared capability.
+  /// This does not imply platform/admin approval; the Runtime Broker checks
+  /// both authorities independently on every Host API call.
+  Future<void> grantPermission(String modId, String capability) async {
+    final db = await _db;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'mod_installations',
+        where: 'owner_id=? AND mod_id=? AND status=?',
+        whereArgs: [ownerId, modId, 'installed'],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('MOD 未安装');
+      final installation = rows.first;
+      final installationId = installation['installation_id']! as String;
+      final manifest = jsonDecode(installation['manifest_json']! as String);
+      if (manifest is! Map) {
+        throw const FormatException('MOD Manifest 数据损坏');
+      }
+
+      final permissions = manifest['permissions'];
+      bool declared = false;
+      if (permissions is List) {
+        for (final item in permissions) {
+          if (item == capability) {
+            declared = true;
+            break;
+          }
+          if (item is Map && item['capability'] == capability) {
+            declared = true;
+            break;
+          }
+        }
+      }
+      if (!declared) {
+        throw StateError('MOD 未声明此 capability');
+      }
+
+      final existing = await txn.query(
+        'mod_permission_grants',
+        where: 'installation_id=? AND capability=? AND revoked_at IS NULL',
+        whereArgs: [installationId, capability],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) return;
+
+      await txn.insert('mod_permission_grants', {
+        'installation_id': installationId,
+        'capability': capability,
+        'scope_json': '{}',
+        'granted_at': _now(),
+        'revoked_at': null,
+        'policy_version': '1',
+      });
+      await _audit(
+        txn,
+        modId: modId,
+        installationId: installationId,
+        action: 'permission_grant',
+        capability: capability,
+      );
+    });
+  }
+
   Future<void> revokePermission(String modId, String capability) async {
     final db = await _db;
     await db.transaction((txn) async {
@@ -369,8 +461,8 @@ class ModPlatformStore {
         whereArgs: [installationId, capability],
       );
       if (changed == 0) return;
-      // Until the Runtime Broker is wired in, disabling the MOD is the
-      // fail-closed response to any grant revocation.
+      // Revoking a Host capability immediately disables the installation as a
+      // fail-closed response; the Registry also terminates the active session.
       await txn.update(
         'mod_installations',
         {'enabled': 0, 'updated_at': now},

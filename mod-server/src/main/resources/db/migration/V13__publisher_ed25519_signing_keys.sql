@@ -23,5 +23,7 @@ CREATE INDEX idx_publisher_signing_key_status
   ON mod_publisher_signing_key(publisher_id, status);
 
 ALTER TABLE mod_versions
-  ADD COLUMN publisher_key_id CHAR(64) NULL,
-  ADD COLUMN publisher_signature VARCHAR(128) NULL;
+    ADD COLUMN publisher_key_id CHAR(64) NULL;
+
+ALTER TABLE mod_versions
+    ADD COLUMN publisher_signature VARCHAR(128) NULL;

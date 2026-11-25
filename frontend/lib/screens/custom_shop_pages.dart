@@ -126,11 +126,12 @@ class _CustomProductEditorSheetState extends State<CustomProductEditorSheet> {
     try {
       await widget.api.createCategory(name);
       await _loadCategories();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _category = name;
           _error = null;
         });
+      }
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
     }

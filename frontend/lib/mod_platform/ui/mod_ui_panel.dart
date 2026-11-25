@@ -62,7 +62,10 @@ class _ModUiPanelState extends State<ModUiPanel> {
       if (confirmed != true || !mounted) return;
       // Prevent TOCTOU: a newer install must not silently alter the template
       // between the confirmation dialog and the capability invocation.
-      final current = await widget.runtime.taskPayload(widget.instance, template.index);
+      final current = await widget.runtime.taskPayload(
+        widget.instance,
+        template.index,
+      );
       if (!mapEquals(proposed, current)) {
         throw ModRuntimeUnavailable('任务模板已变化，请重新打开 MOD');
       }
@@ -79,7 +82,9 @@ class _ModUiPanelState extends State<ModUiPanel> {
       );
       if (!mounted) return;
       widget.onTaskCreated?.call();
-      setState(() => _message = '任务已创建（请求 ${result.requestId.substring(0, 8)}）');
+      setState(
+        () => _message = '任务已创建（请求 ${result.requestId.substring(0, 8)}）',
+      );
     } catch (error) {
       if (mounted) setState(() => _message = '操作已拒绝：$error');
     } finally {
@@ -97,8 +102,10 @@ class _ModUiPanelState extends State<ModUiPanel> {
       children: [
         Text(definition.name, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 4),
-        Text('版本 ${definition.version} · ${definition.effectiveProfile}',
-            style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          '版本 ${definition.version} · ${definition.effectiveProfile}',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 10),
         const Text('此页面由 PlanBlindBox 安全渲染，仅展示已验证的声明式数据，不运行第三方代码。'),
         const SizedBox(height: 10),
@@ -115,8 +122,7 @@ class _ModUiPanelState extends State<ModUiPanel> {
             padding: const EdgeInsets.only(bottom: 10),
             child: Text(_message!, key: const Key('mod-ui-result')),
           ),
-        if (definition.taskTemplates.isEmpty)
-          const Text('此 MOD 暂无可展示的任务模板。'),
+        if (definition.taskTemplates.isEmpty) const Text('此 MOD 暂无可展示的任务模板。'),
         for (final template in definition.taskTemplates)
           Card(
             child: ListTile(
@@ -129,8 +135,10 @@ class _ModUiPanelState extends State<ModUiPanel> {
           ),
         if (_busy) const LinearProgressIndicator(),
         const SizedBox(height: 12),
-        Text('宿主任务创建需要管理员审核证明；未接入审核服务时默认拒绝。',
-            style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          '宿主任务创建需要登录、平台签名证明、实时授权复核和本次操作确认。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
       ],
     );
   }

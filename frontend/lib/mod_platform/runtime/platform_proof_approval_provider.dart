@@ -229,7 +229,6 @@ class PlatformProofApprovalProvider
     final valid = await Ed25519().verify(
       signingInput,
       signature: signature,
-      publicKey: rawPublicKey,
     );
     if (!valid) {
       throw const ModPlatformAuthorizationException('平台授权证明签名验证失败');

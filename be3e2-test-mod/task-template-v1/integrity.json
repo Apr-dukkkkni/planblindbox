@@ -1,0 +1,7 @@
+{
+  "algorithm": "SHA-256",
+  "files": {
+    "manifest.json": "91c8a58d0f9b8ab4d2d13c481ec0ce113d5cda6a03865317af0a0f43b01b7d2c",
+    "content/task-templates.json": "83d67b9d3281896f4b153e8cd1329cea9d8ec4ef9b7c042387eb621129ebde99"
+  }
+}

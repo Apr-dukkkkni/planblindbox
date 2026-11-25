@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../data/today_api.dart';
 import '../services/mod_registry.dart';
+import '../mod_platform/runtime/mod_capability_broker.dart';
+import '../mod_platform/runtime/mod_runtime_manager.dart';
+import '../mod_platform/runtime/platform_proof_approval_provider.dart';
+import '../mod_platform/ui/mod_ui_surface.dart';
 import '../services/mod_import_flow.dart';
 import 'mod_marketplace_page.dart';
 import '../auth/auth_session.dart';
@@ -9,10 +13,16 @@ import '../auth/auth_session.dart';
 /// Leaf drawer: discovery/import at top-right, installed template shortcuts below.
 /// Enable/disable and installed-Mod administration belong exclusively to Settings.
 class ModHubDrawer extends StatefulWidget {
-  const ModHubDrawer({super.key, required this.api, required this.auth});
+  const ModHubDrawer({
+    super.key,
+    required this.api,
+    required this.auth,
+    this.onLaunchMod,
+  });
 
   final TodayApi api;
   final AuthSession auth;
+  final Future<void> Function(String modId, ModUiPresentation mode)? onLaunchMod;
 
   @override
   State<ModHubDrawer> createState() => _ModHubDrawerState();
@@ -20,6 +30,14 @@ class ModHubDrawer extends StatefulWidget {
 
 class _ModHubDrawerState extends State<ModHubDrawer> {
   late final ModRegistry _registry = ModRegistry(widget.api.repository);
+  late final PlatformProofApprovalProvider _platformApproval =
+      PlatformProofApprovalProvider(auth: widget.auth);
+  late final ModCapabilityBroker _broker = ModCapabilityBroker.forRepository(
+    widget.api.repository,
+    approvalProvider: _platformApproval,
+  );
+  late final ModRuntimeManager _runtime =
+      ModRuntimeManager.forRepository(widget.api.repository);
   bool _enabled = true;
   bool _loading = true;
   bool _busy = false;
@@ -33,11 +51,18 @@ class _ModHubDrawerState extends State<ModHubDrawer> {
     _reload();
   }
 
+  @override
+  void dispose() {
+    _runtime.shutdown();
+    _platformApproval.dispose();
+    super.dispose();
+  }
+
   Future<void> _reload() async {
     try {
       final setting = await widget.api.repository.getAppSetting('mods.enabled.v1');
       final installed = await _registry.list();
-      final templates = await _registry.taskTemplates();
+      final templates = await _runtime.listAvailableTaskTemplates();
       if (!mounted) return;
       setState(() {
         _enabled = setting != 'false';
@@ -87,31 +112,45 @@ class _ModHubDrawerState extends State<ModHubDrawer> {
     );
     if (confirmed != true || !mounted) return;
     setState(() => _busy = true);
+    ModRuntimeInstance? runtime;
     try {
-      // Recheck the global switch and the registry before modifying user data.
-      final enabled = await widget.api.repository.getAppSetting('mods.enabled.v1') != 'false';
-      final available = await _registry.taskTemplates();
-      if (!enabled || !available.any((item) =>
-          item['modId'] == template['modId'] &&
-          item['title'] == template['title'] &&
-          item['targetCount'] == template['targetCount'])) {
-        throw StateError('Mod 已被关闭、权限撤回或模板已更新');
+      runtime = await _runtime.start(template['modId'] as String);
+      if (runtime.installationId != template['installationId']) {
+        throw StateError('MOD 安装实例已变化，请刷新后重试');
       }
-      await widget.api.createTask(
-        title: title,
-        note: template['note'] as String,
-        targetCount: template['targetCount'] as int,
-        importance: template['importance'] as int,
-        difficulty: template['difficulty'] as int,
-        categoryId: 0,
-        recordRule: const {'mode': 'DEFAULT'},
+      final payload = await _runtime.taskPayload(
+        runtime,
+        template['templateIndex'] as int,
+      );
+      // The exact payload originally confirmed by the user must still match.
+      for (final field in const ['title', 'note', 'targetCount', 'importance', 'difficulty']) {
+        if (template[field] != payload[field]) {
+          throw StateError('任务模板内容已发生变化，请重新确认');
+        }
+      }
+      // MOD execution never bypasses the existing P0-3 Broker.
+      final consent = await _broker.issueUserConsent(
+        session: runtime.session,
+        capability: 'host.tasks.create',
+        payload: payload,
+      );
+      final result = await _broker.invoke(
+        session: runtime.session,
+        capability: 'host.tasks.create',
+        payload: payload,
+        consent: consent,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已创建任务：$title')));
-      Navigator.of(context).pop(); // return to Today; refresh by pulling down
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已创建任务：$title（请求 ${result.requestId.substring(0, 8)}）')),
+      );
+      Navigator.of(context).pop();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('创建失败：$e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('创建失败：$e')));
+      }
     } finally {
+      if (runtime != null) _runtime.stop(runtime);
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -158,7 +197,42 @@ class _ModHubDrawerState extends State<ModHubDrawer> {
                   else ...[
                     Text('已安装 ${_installed.length} 个 Mod', style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 10),
+                    Text('打开 MOD', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 6),
+                    for (final mod in _installed.where(
+                      (item) => item['enabled'] == true &&
+                          item['status'] == 'installed',
+                    ))
+                      Card(
+                        child: ListTile(
+                          title: Text(mod['name'] as String),
+                          subtitle: const Text('在宿主提供的安全界面中打开'),
+                          trailing: PopupMenuButton<ModUiPresentation>(
+                            key: Key('mod-launch-${mod['id']}'),
+                            tooltip: '选择 MOD 展示方式',
+                            enabled: !_busy && widget.onLaunchMod != null,
+                            onSelected: (mode) {
+                              Navigator.of(context).pop();
+                              widget.onLaunchMod?.call(mod['id'] as String, mode);
+                            },
+                            itemBuilder: (_) => [
+                              for (final mode in ModUiPresentation.values)
+                                PopupMenuItem<ModUiPresentation>(
+                                  value: mode,
+                                  child: Text(mode.label),
+                                ),
+                            ],
+                            icon: const Icon(Icons.open_in_new),
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
                     Text('可用任务模板', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 4),
+                    const Text(
+                      '创建任务需要登录并在线验证平台签发的授权证明；网络或授权状态不可用时会默认拒绝。',
+                      style: TextStyle(fontSize: 12),
+                    ),
                     const SizedBox(height: 6),
                     if (_templates.isEmpty)
                       const Text('暂无可用模板。点击右上角的市场或导入图标来添加 Mod。')

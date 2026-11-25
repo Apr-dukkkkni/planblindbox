@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import 'mod_package_directory_loader.dart';
 import 'mod_package_installer.dart';
 import 'mod_package_models.dart';
 
@@ -49,4 +50,18 @@ Future<void> deleteV1PackageDirectory({
     throw const FormatException('安装目录不是普通目录，拒绝删除');
   }
   await Directory(actual).delete(recursive: true);
+}
+
+
+/// Reloads an installed V1 package from its owner-scoped directory and
+/// verifies disk bytes against both integrity.json and the registry projection.
+Future<ModValidatedPackage> loadV1PackageContents({
+  required int ownerId,
+  required Map<String, dynamic> installation,
+}) async {
+  final databasePath = await getDatabasesPath();
+  final root = Directory(
+    p.join(databasePath, 'mod_packages', 'owner_$ownerId'),
+  );
+  return ModPackageDirectoryLoader(installationRoot: root).load(installation);
 }

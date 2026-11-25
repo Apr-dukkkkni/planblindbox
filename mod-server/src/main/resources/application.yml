@@ -28,6 +28,17 @@ spring:
 mod:
   admin-token: ${MOD_ADMIN_TOKEN:}
   allowed-origins: ${MOD_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*}
+  platform-signing:
+    # Keep the platform proof key separate from every Publisher signing key.
+    # Empty defaults preserve startup but proof issuance returns 503 (fail closed).
+    private-key-pkcs8-base64: ${MOD_PLATFORM_SIGNING_PRIVATE_KEY_PKCS8_BASE64:}
+    public-key-x509-base64: ${MOD_PLATFORM_SIGNING_PUBLIC_KEY_X509_BASE64:}
+    # Preferred multi-key mode. Each entry has publicKeyX509Base64, status, and an
+    # optional privateKeyPkcs8Base64 only for the single ACTIVE key.
+    key-ring-json: ${MOD_PLATFORM_SIGNING_KEY_RING_JSON:}
+    active-key-id: ${MOD_PLATFORM_SIGNING_ACTIVE_KEY_ID:}
+    issuer: ${MOD_PLATFORM_SIGNING_ISSUER:planblindbox-mod-server}
+    ttl-seconds: ${MOD_PLATFORM_SIGNING_TTL_SECONDS:300}
 auth:
   jwt:
     secret-base64: ${APP_JWT_SECRET_BASE64:}

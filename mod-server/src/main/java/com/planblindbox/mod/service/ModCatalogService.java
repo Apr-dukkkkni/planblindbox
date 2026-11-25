@@ -1,6 +1,10 @@
 package com.planblindbox.mod.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonParser;
+import com.planblindbox.mod.manifest.ManifestV1Validator;
+import com.planblindbox.mod.manifest.SemVerV1;
 import com.planblindbox.mod.domain.BadRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.dao.DuplicateKeyException;
@@ -20,24 +24,51 @@ import java.util.regex.Pattern;
 public class ModCatalogService {
     private final JdbcTemplate jdbc;
     private final ManifestValidator validator;
+    private final ManifestV1Validator v1Validator;
+    private final ObjectMapper mapper;
+    private final PublisherSigningKeyService publisherSigningKeys;
     private static final Pattern MOD_ID = Pattern.compile("^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+$");
-    private static final Pattern VERSION = Pattern.compile("^\\d+\\.\\d+\\.\\d+$");
-    public ModCatalogService(JdbcTemplate jdbc, ManifestValidator validator) {
-        this.jdbc=jdbc; this.validator=validator;
+    public ModCatalogService(JdbcTemplate jdbc, ManifestValidator validator,
+            ManifestV1Validator v1Validator, ObjectMapper mapper, PublisherSigningKeyService publisherSigningKeys) {
+        this.jdbc=jdbc; this.validator=validator; this.v1Validator=v1Validator; this.mapper=mapper;
+        this.publisherSigningKeys=publisherSigningKeys;
     }
+
+    private JsonNode validatePublishedManifest(String raw) {
+        try (JsonParser parser = mapper.getFactory().createParser(raw)) {
+            parser.enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
+            JsonNode root = mapper.readTree(parser);
+            if (root == null || !root.isObject() || parser.nextToken() != null)
+                throw new BadRequest("Manifest 必须是单个 JSON 对象");
+            return root.has("manifestVersion") ? v1Validator.validate(raw) : validator.validate(raw);
+        } catch (BadRequest e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BadRequest("无效 JSON、重复字段或尾随内容");
+        }
+    }
+
+    private String displayName(JsonNode manifest) {
+        JsonNode name = manifest.path("name");
+        if (name.isTextual()) return name.asText();
+        if (name.isObject()) {
+            for (String locale : List.of("zh-CN", "zh", "en", "en-US")) {
+                if (name.path(locale).isTextual()) return name.path(locale).asText();
+            }
+            var fields = name.fields();
+            if (fields.hasNext()) return fields.next().getValue().asText();
+        }
+        throw new BadRequest("Manifest name 无法转换为市场展示名称");
+    }
+
     private void checkId(String id) {
         if (id == null || id.length()>100 || !MOD_ID.matcher(id).matches()) throw new BadRequest("Mod ID 格式错误");
     }
     private void checkVersion(String version) {
-        if (version == null || version.length()>32 || !VERSION.matcher(version).matches()) throw new BadRequest("版本号格式错误");
+        SemVerV1.validate(version, "version");
     }
     private int compare(String a,String b) {
-        String[] x=a.split("\\."), y=b.split("\\.");
-        for(int i=0;i<3;i++) {
-            int c = new java.math.BigInteger(x[i]).compareTo(new java.math.BigInteger(y[i]));
-            if(c!=0) return c;
-        }
-        return 0;
+        return SemVerV1.compare(a, b);
     }
 
     public List<Map<String,Object>> list(String search,int page,int size) {
@@ -74,11 +105,27 @@ public class ModCatalogService {
         return list.get(0);
     }
 
+    public Map<String, String> publisherSignature(String id, String version) {
+        checkId(id); checkVersion(version);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT publisher_key_id,publisher_signature FROM mod_versions WHERE mod_id=? AND version=?", id, version);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Mod 版本不存在");
+        Object keyId = rows.get(0).get("publisher_key_id");
+        Object signature = rows.get(0).get("publisher_signature");
+        if (keyId == null || signature == null) return Map.of();
+        return Map.of("keyId", keyId.toString(), "signature", signature.toString());
+    }
+
     @Transactional
-    public Map<String,String> publish(String raw) {
-        JsonNode m=validator.validate(raw);
+    public Map<String,String> publish(String raw, String publisherKeyId, String publisherSignature) {
+        JsonNode m=validatePublishedManifest(raw);
+        if (m.has("manifestVersion")) {
+            String publisherId = m.path("publisher").path("id").asText();
+            publisherSigningKeys.verifyManifest(publisherId, publisherKeyId, publisherSignature, raw);
+        }
         String id=m.get("id").asText(), version=m.get("version").asText();
-        String name=m.get("name").asText(), desc=m.has("description")?m.get("description").asText():"";
+        String name=displayName(m), desc=m.has("description")?m.get("description").asText():"";
+        if (desc.length() > 300) desc = desc.substring(0, 300);
         List<Map<String,Object>> found=jdbc.queryForList("SELECT latest_version,enabled FROM mod_packages WHERE mod_id=? FOR UPDATE",id);
         if(found.isEmpty()) {
             jdbc.update("INSERT INTO mod_packages(mod_id,name,description,latest_version,enabled) VALUES (?,?,?,?,TRUE)",id,name,desc,version);
@@ -87,7 +134,12 @@ public class ModCatalogService {
             if(compare(version,current)<=0) throw new ResponseStatusException(HttpStatus.CONFLICT,"发布版本必须高于已有版本");
             jdbc.update("UPDATE mod_packages SET name=?,description=?,latest_version=?,updated_at=CURRENT_TIMESTAMP WHERE mod_id=?",name,desc,version,id);
         }
-        jdbc.update("INSERT INTO mod_versions(mod_id,version,manifest_json) VALUES (?,?,?)",id,version,raw);
+        if (m.has("manifestVersion")) {
+            jdbc.update("INSERT INTO mod_versions(mod_id,version,manifest_json,publisher_key_id,publisher_signature) VALUES (?,?,?,?,?)",
+                    id, version, raw, publisherKeyId, publisherSignature);
+        } else {
+            jdbc.update("INSERT INTO mod_versions(mod_id,version,manifest_json) VALUES (?,?,?)", id, version, raw);
+        }
         return Map.of("id",id,"version",version,"status","PUBLISHED");
     }
 
@@ -123,19 +175,27 @@ public class ModCatalogService {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "requestId 已被其他 Mod 下载请求使用");
             }
-            return Map.of("manifest", json, "requestId", normalized, "counted", false);
+            Map<String, Object> replay = new java.util.LinkedHashMap<>();
+            replay.put("manifest", json); replay.put("requestId", normalized); replay.put("counted", false);
+            Map<String, String> signature = publisherSignature(id, version);
+            if (!signature.isEmpty()) { replay.put("publisherKeyId", signature.get("keyId")); replay.put("publisherSignature", signature.get("signature")); }
+            return replay;
         }
         Number downloadEventId = keyHolder.getKey();
         if (downloadEventId == null) throw new IllegalStateException("缺少下载事件主键");
         jdbc.update(
             "INSERT INTO mod_download_outbox(download_event_id,mod_id) VALUES (?,?)",
             downloadEventId.longValue(), id);
-        return Map.of("manifest",json,"requestId",normalized,"counted",true);
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("manifest", json); response.put("requestId", normalized); response.put("counted", true);
+        Map<String, String> signature = publisherSignature(id, version);
+        if (!signature.isEmpty()) { response.put("publisherKeyId", signature.get("keyId")); response.put("publisherSignature", signature.get("signature")); }
+        return response;
     }
     @Transactional
     public Map<String,Object> changeVisibility(String id,boolean enabled) {
         checkId(id);
-        int count=jdbc.update("UPDATE mod_packages SET enabled=?, updated_at=CURRENT_TIMESTAMP WHERE mod_id=?",enabled,id);
+        int count=jdbc.update("UPDATE mod_packages SET enabled=?, authorization_revision=authorization_revision+1, updated_at=CURRENT_TIMESTAMP WHERE mod_id=?",enabled,id);
         if(count==0)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Mod 不存在");
         return Map.of("id",id,"enabled",enabled);
     }

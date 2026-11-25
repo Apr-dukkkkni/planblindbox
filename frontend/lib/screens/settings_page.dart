@@ -6,14 +6,21 @@ import 'package:file_saver/file_saver.dart';
 import 'package:flutter/material.dart';
 
 import '../data/today_api.dart';
+import '../auth/auth_session.dart';
+import '../mod_platform/runtime/mod_runtime_session.dart';
 import '../services/app_preferences.dart';
 import 'mod_management_page.dart';
 
 /// 本地设置：偏好设置、数据备份恢复、重置和存储状态。
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.api});
+  const SettingsPage({
+    super.key,
+    required this.api,
+    required this.auth,
+  });
 
   final TodayApi api;
+  final AuthSession auth;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -291,6 +298,9 @@ class _SettingsPageState extends State<SettingsPage> {
                         value: _modsEnabled,
                         onChanged: _busy ? null : (enabled) async {
                           try {
+                            if (!enabled) {
+                              ModRuntimeSessionManager.instance.terminateAll();
+                            }
                             await widget.api.repository.setAppSetting('mods.enabled.v1', enabled.toString());
                             if (mounted) setState(() => _modsEnabled = enabled);
                           } catch (error) {
@@ -306,7 +316,10 @@ class _SettingsPageState extends State<SettingsPage> {
                         trailing: const Icon(Icons.chevron_right),
                         onTap: _busy ? null : () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => ModManagementPage(api: widget.api),
+                            builder: (_) => ModManagementPage(
+                              api: widget.api,
+                              auth: widget.auth,
+                            ),
                           ),
                         ),
                       ),

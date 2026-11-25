@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../mod_platform/runtime/mod_capability_broker.dart';
+import '../mod_platform/runtime/mod_runtime_manager.dart';
+import '../mod_platform/runtime/platform_proof_approval_provider.dart';
+import '../mod_platform/ui/mod_ui_panel.dart';
+import '../mod_platform/ui/mod_ui_surface.dart';
+
 import '../data/today_api.dart';
 import 'today_page.dart';
 import 'store_page.dart';
@@ -36,8 +42,62 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  late final ModRuntimeManager _uiRuntime =
+      ModRuntimeManager.forRepository(widget.api.repository);
+  late final PlatformProofApprovalProvider _platformApproval =
+      PlatformProofApprovalProvider(auth: widget.auth);
+  late final ModCapabilityBroker _uiBroker = ModCapabilityBroker.forRepository(
+    widget.api.repository,
+    approvalProvider: _platformApproval,
+  );
+  ModRuntimeInstance? _openModInstance;
+  ModUiPresentation _presentation = ModUiPresentation.dialog;
+  bool _openingMod = false;
+
+  Future<void> _launchMod(String modId, ModUiPresentation mode) async {
+    if (_openingMod || !mounted) return;
+    _openingMod = true;
+    try {
+      _dismissMod(returnHome: false);
+      final instance = await _uiRuntime.start(modId);
+      if (!mounted) {
+        _uiRuntime.stop(instance);
+        return;
+      }
+      setState(() {
+        _openModInstance = instance;
+        _presentation = mode;
+        _selectedIndex = 0;
+        _todayVersion++;
+        _closeBallToken++;
+      });
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('无法打开 MOD：$error')),
+        );
+      }
+    } finally {
+      _openingMod = false;
+    }
+  }
+
+  void _dismissMod({bool returnHome = true}) {
+    final previous = _openModInstance;
+    if (previous != null) _uiRuntime.stop(previous);
+    if (!mounted) return;
+    setState(() {
+      _openModInstance = null;
+      if (returnHome) {
+        _selectedIndex = 0;
+        _todayVersion++;
+        _closeBallToken++;
+      }
+    });
+  }
+
   int _selectedIndex = AppPreferences.instance.defaultTabIndex;
   int _todayVersion = 0;
   int _timeVersion = 0;
@@ -50,6 +110,7 @@ class _AppShellState extends State<AppShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.auth.addListener(_onAccountChanged);
     CoreAutoSync.instance.addListener(_onSyncApplied);
 
@@ -59,8 +120,23 @@ class _AppShellState extends State<AppShell> {
     });
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // No MOD UI keeps a privileged session alive after app suspension.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      if (_openModInstance != null) _dismissMod();
+    }
+  }
+
   void _onAccountChanged() {
-    if (mounted) setState(() => _todayVersion++);
+    // Never carry a MOD surface or Session into another account.
+    if (_openModInstance != null) {
+      _dismissMod();
+    } else if (mounted) {
+      setState(() => _todayVersion++);
+    }
   }
 
   void _onSyncApplied() {
@@ -137,11 +213,12 @@ class _AppShellState extends State<AppShell> {
         barrierDismissible: false,
         builder: (_) => FishingSessionDialog(api: stats),
       );
-      if (mounted)
+      if (mounted) {
         setState(() {
           _timeVersion++;
           _statsVersion++;
         });
+      }
     } finally {
       stats.dispose();
     }
@@ -165,8 +242,11 @@ class _AppShellState extends State<AppShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.auth.removeListener(_onAccountChanged);
     CoreAutoSync.instance.removeListener(_onSyncApplied);
+    _uiRuntime.shutdown();
+    _platformApproval.dispose();
     super.dispose();
   }
 
@@ -213,6 +293,12 @@ class _AppShellState extends State<AppShell> {
   }
 
   void _selectTab(int nextIndex) {
+    // A floating panel may stay visible while using the host navigation, but
+    // full-screen/modal screens do not permit navigation behind the panel.
+    if (_openModInstance != null &&
+        _presentation != ModUiPresentation.floating) {
+      return;
+    }
     if (nextIndex == _selectedIndex) {
       setState(() => _closeBallToken++);
       return;
@@ -231,82 +317,114 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      key: _scaffoldKey,
-      drawer: ModHubDrawer(api: widget.api, auth: widget.auth),
-      body: Stack(
-        children: [
-          IndexedStack(
-            index: _selectedIndex,
-            children: [
-              TodayPage(
-                key: ValueKey('today-$_todayVersion'),
-                api: widget.api,
-                archiveController: widget.archiveController,
-                isFemale: _isFemale,
-                wellbeingUserId: _wellbeingUserId,
-                onOpenModDrawer: () => _scaffoldKey.currentState?.openDrawer(),
+    final activeMod = _openModInstance;
+    final isModal = activeMod != null &&
+        _presentation != ModUiPresentation.floating;
+    return PopScope(
+      canPop: activeMod == null,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _openModInstance != null) _dismissMod();
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: ModHubDrawer(
+          api: widget.api,
+          auth: widget.auth,
+          onLaunchMod: _launchMod,
+        ),
+        body: Stack(
+          children: [
+            IndexedStack(
+              index: _selectedIndex,
+              children: [
+                TodayPage(
+                  key: ValueKey('today-$_todayVersion'),
+                  api: widget.api,
+                  archiveController: widget.archiveController,
+                  isFemale: _isFemale,
+                  wellbeingUserId: _wellbeingUserId,
+                  onOpenModDrawer: () => _scaffoldKey.currentState?.openDrawer(),
+                ),
+                TimePage(
+                  key: ValueKey('time-$_timeVersion'),
+                  api: widget.api,
+                  refreshToken: _timeVersion,
+                ),
+                StorePage(api: widget.api, refreshToken: _storeVersion),
+                StatsPage(
+                  api: widget.api,
+                  isFemale: _isFemale,
+                  wellbeingUserId: _wellbeingUserId,
+                  refreshToken: _statsVersion,
+                ),
+                MyPage(
+                  api: widget.api,
+                  auth: widget.auth,
+                  refreshToken: _myVersion,
+                ),
+              ],
+            ),
+            if (activeMod == null)
+              QuickActionBall(
+                closeToken: _closeBallToken,
+                showPeriod: _isFemale,
+                onPeriod: _quickPeriod,
+                onMood: _quickMood,
+                onTask: _quickTask,
+                onHabit: _quickHabit,
+                onFishing: _quickFishing,
               ),
-              TimePage(
-                key: ValueKey('time-$_timeVersion'),
-                api: widget.api,
-                refreshToken: _timeVersion,
+            if (activeMod != null)
+              Positioned.fill(
+                child: ModUiSurface(
+                  key: ValueKey('mod-ui-${activeMod.installationId}-${_presentation.name}'),
+                  presentation: _presentation,
+                  onClose: () => _dismissMod(),
+                  child: ModUiPanel(
+                    instance: activeMod,
+                    runtime: _uiRuntime,
+                    broker: _uiBroker,
+                    onTaskCreated: () {
+                      if (mounted) setState(() => _todayVersion++);
+                    },
+                  ),
+                ),
               ),
-              StorePage(api: widget.api, refreshToken: _storeVersion),
-              StatsPage(
-                api: widget.api,
-                isFemale: _isFemale,
-                wellbeingUserId: _wellbeingUserId,
-                refreshToken: _statsVersion,
-              ),
-              MyPage(
-                api: widget.api,
-                auth: widget.auth,
-                refreshToken: _myVersion,
-              ),
-            ],
-          ),
-          QuickActionBall(
-            closeToken: _closeBallToken,
-            showPeriod: _isFemale,
-            onPeriod: _quickPeriod,
-            onMood: _quickMood,
-            onTask: _quickTask,
-            onHabit: _quickHabit,
-            onFishing: _quickFishing,
-          ),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: _selectTab,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.today_outlined),
-            selectedIcon: Icon(Icons.today),
-            label: '今日',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.timer_outlined),
-            selectedIcon: Icon(Icons.timer),
-            label: '时间',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.storefront_outlined),
-            selectedIcon: Icon(Icons.storefront),
-            label: '商店',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.bar_chart_outlined),
-            selectedIcon: Icon(Icons.bar_chart),
-            label: '统计',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: '我的',
-          ),
-        ],
+          ],
+        ),
+        bottomNavigationBar: isModal
+            ? null
+            : NavigationBar(
+                selectedIndex: _selectedIndex,
+          onDestinationSelected: _selectTab,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.today_outlined),
+              selectedIcon: Icon(Icons.today),
+              label: '今日',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.timer_outlined),
+              selectedIcon: Icon(Icons.timer),
+              label: '时间',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.storefront_outlined),
+              selectedIcon: Icon(Icons.storefront),
+              label: '商店',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.bar_chart_outlined),
+              selectedIcon: Icon(Icons.bar_chart),
+              label: '统计',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline_rounded),
+              selectedIcon: Icon(Icons.person_rounded),
+              label: '我的',
+            ),
+          ],
+        ),
       ),
     );
   }

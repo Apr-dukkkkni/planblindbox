@@ -7,14 +7,37 @@ import 'dart:convert';
 /// grants, or Runtime support. Those checks belong to the package installer
 /// and Capability Broker.
 class ModManifestV1Validator {
-  static const int maxManifestBytes = 64 * 1024;
-  static const int maxPermissions = 30;
-  static const int maxDependencies = 50;
 
-  static const Set<String> capabilities = {
-    'storage.local',
-    'storage.files',
-    'network.fetch',
+  static const int maxManifestBytes = 64 * 1024;//64kb
+  static const int maxPermissions = 30;//申请30条权限
+  static const int maxDependencies = 50;//最多依赖
+
+  static const Set<String> capabilities = {  //系统给MOD开放的全部能力白名单
+    'storage.local',  //MOD 独立隔离的本地键值存储
+    'storage.files',  //文件级沙箱存储
+    'network.fetch',   //发起网络 HTTP/HTTPS 请求
+    //获取信息
+    'host.data.tasks.read',//读宿主任务
+    'host.data.habits.read',
+    'host.data.checkins.read',
+    'host.data.time_records.read',
+    'host.data.diary.read',
+    'host.data.mood.read',
+    //写或者修改
+    'host.tasks.create',
+    'host.tasks.update_limited',
+    'host.habits.create',
+    'host.habits.check_in',//给习惯打卡
+    //UI、跳转、通知
+    'host.external_link.open',//打开外部链接，浏览器跳转
+    'host.ui.notification',   //弹出宿主/系统内通知
+    'host.ui.home_widget',    //宿主主页小组件
+    //MOD 之间通信（跨模组消息）
+    'mods.message.send',      //发消息给其他MOD
+    'mods.message.subscribe',//订阅、接收其他 MOD 发出来的消息
+  };
+
+  static const Set<String> _hostBusinessCapabilities = {  //宿主业务数据
     'host.data.tasks.read',
     'host.data.habits.read',
     'host.data.checkins.read',
@@ -25,6 +48,11 @@ class ModManifestV1Validator {
     'host.tasks.update_limited',
     'host.habits.create',
     'host.habits.check_in',
+  };
+
+  static const Set<String> _egressCapabilities = {   //外发能力
+    //网络外发
+    'network.fetch',//**必须带 scope，锁定域名、HTTP 方法、路径前缀**，不能随便全网爬。就是 MOD 里的 fetch /http 请求权限
     'host.external_link.open',
     'host.ui.notification',
     'host.ui.home_widget',
@@ -32,29 +60,7 @@ class ModManifestV1Validator {
     'mods.message.subscribe',
   };
 
-  static const Set<String> _hostBusinessCapabilities = {
-    'host.data.tasks.read',
-    'host.data.habits.read',
-    'host.data.checkins.read',
-    'host.data.time_records.read',
-    'host.data.diary.read',
-    'host.data.mood.read',
-    'host.tasks.create',
-    'host.tasks.update_limited',
-    'host.habits.create',
-    'host.habits.check_in',
-  };
-
-  static const Set<String> _egressCapabilities = {
-    'network.fetch',
-    'host.external_link.open',
-    'host.ui.notification',
-    'host.ui.home_widget',
-    'mods.message.send',
-    'mods.message.subscribe',
-  };
-
-  static const Set<String> _hostReadCapabilities = {
+  static const Set<String> _hostReadCapabilities = {  //宿主只读数据
     'host.data.tasks.read',
     'host.data.habits.read',
     'host.data.checkins.read',
@@ -63,16 +69,18 @@ class ModManifestV1Validator {
     'host.data.mood.read',
   };
 
-  static const Set<String> _platforms = {
+  static const Set<String> _platforms = { //声明平台
     'android', 'ios', 'web', 'windows', 'macos', 'linux'
   };
-  static const Set<String> _uiModes = {
+  static const Set<String> _uiModes = { //弹窗模式
     'full_screen', 'modal', 'overlay'
   };
-  static const Set<String> _contentKinds = {
+  static const Set<String> _contentKinds = {  //内容类型MOD
     'task_template', 'theme', 'shop_resource_pack', 'reward_rules', 'link_hub'
   };
   static const Set<String> _httpMethods = {
+    //**探测资源是否存在、看文件大小、看最后修改时间**，不下载内容。比如 MOD 想判断一张远程图片链接还能不能访问、文件多大，不需要把图片拉下来。缓存校验（看 `ETag` / `Last-Modified`）
+    //put是替换整条资源，patch是部分修改
     'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'
   };
   static const Set<String> _scopeKeys = {
@@ -103,13 +111,12 @@ class ModManifestV1Validator {
       RegExp(r'^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$');
   static final RegExp _fieldPattern = RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,79}$');
 
-  /// Parses strict JSON (including duplicate-key rejection) and validates V1.
-  /// Returns the decoded manifest without trusting or injecting a Profile.
+
   Map<String, dynamic> parse(String raw) {
     if (utf8.encode(raw).length > maxManifestBytes) {
       throw const FormatException('Manifest 超过 64 KiB');
     }
-    final decoded = _StrictJsonReader(raw).parse();
+    final decoded = parseStrictJson(raw);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('Manifest 根节点必须是 JSON 对象');
     }
@@ -117,7 +124,12 @@ class ModManifestV1Validator {
     return decoded;
   }
 
+  /// Parses JSON while rejecting duplicate keys, malformed Unicode and
+  /// trailing data. Package metadata and content documents share this parser.
+  static Object? parseStrictJson(String raw) => _StrictJsonReader(raw).parse();
+
   void _validateManifest(Map<String, dynamic> manifest) {
+    // 校验顶层字段：只允许清单定义内的 key，拦截多余、未知字段
     _checkKeys(manifest, const {
       'manifestVersion',
       'id',
@@ -136,59 +148,80 @@ class ModManifestV1Validator {
       'assets',
     }, 'Manifest');
 
+    // ========== 基础版本 & MOD 身份校验 ==========
+    // 当前校验器只支持 V1 版本清单
     if (manifest['manifestVersion'] != 1 || manifest['manifestVersion'] is! int) {
       throw const FormatException('仅支持 manifestVersion = 1');
     }
 
+    // MOD 唯一标识：反向域名格式，限制最长 100 字符
     final id = _requiredString(manifest, 'id', 100);
     if (!_idPattern.hasMatch(id)) {
       throw const FormatException('id 必须为小写反向域名格式');
     }
+
+    // MOD 版本，强制符合 SemVer 2.0 规范
     _validateSemVer(_requiredString(manifest, 'version', 64), 'version');
+
+    // 多语言名称校验（本地化名称对象）
     _validateLocalizedName(manifest['name']);
 
+    // 简介：可选字段，长度上限 1000
     if (manifest.containsKey('description')) {
       _string(manifest['description'], 'description', 0, 1000);
     }
 
+    // ========== 发布者信息校验 ==========
     final publisher = _object(manifest['publisher'], 'publisher');
+    // publisher 对象只允许 id 字段
     _checkKeys(publisher, const {'id'}, 'publisher');
     final publisherId = _requiredString(publisher, 'id', 100);
     if (!_idPattern.hasMatch(publisherId)) {
       throw const FormatException('publisher.id 必须为小写反向域名格式');
     }
 
+    // ========== MOD 类型分支控制 ==========
+    // MOD 只能二选一：content（内容包） / app（可运行模组）
     final type = manifest['type'];
     if (type != 'content' && type != 'app') {
       throw const FormatException('type 只能是 content 或 app');
     }
     final contentKind = manifest['contentKind'];
     if (type == 'content') {
+      // 内容包：必须指定合法的内容分类
       if (contentKind is! String || !_contentKinds.contains(contentKind)) {
         throw const FormatException('content 类型必须声明有效的 contentKind');
       }
     } else if (manifest.containsKey('contentKind')) {
+      // App 类型：禁止携带 contentKind
       throw const FormatException('app 类型不得声明 contentKind');
     }
 
+    // ========== Runtime 运行时约束（强绑定） ==========
     final runtime = _object(manifest['runtime'], 'runtime');
     _checkKeys(runtime, const {'type', 'apiVersion', 'entrypoint'}, 'runtime');
     final runtimeType = runtime['type'];
+    // 仅支持三种运行时：声明式 / Web / Wasm
     if (runtimeType != 'declarative' && runtimeType != 'web' && runtimeType != 'wasm') {
       throw const FormatException('runtime.type 不受支持');
     }
+    // 业务绑定规则：content 只能用 declarative
     if (type == 'content' && runtimeType != 'declarative') {
       throw const FormatException('content 必须使用 declarative Runtime');
     }
+    // App 不能用 declarative，必须是可执行运行时
     if (type == 'app' && runtimeType == 'declarative') {
       throw const FormatException('app 必须使用可执行 Runtime');
     }
+    // 宿主 API 版本号：非负整数字符串
     final apiVersion = _requiredString(runtime, 'apiVersion', 32);
     if (!RegExp(r'^(0|[1-9]\d*)$').hasMatch(apiVersion)) {
       throw const FormatException('runtime.apiVersion 必须为非负整数版本字符串');
     }
+    // 入口文件路径，先校验是安全相对路径（防穿越）
     final entrypoint = _requiredString(runtime, 'entrypoint', 240);
     _validatePackagePath(entrypoint, 'runtime.entrypoint');
+    // 根据 runtime 强制入口文件放在指定根目录下
     final expectedPrefix = switch (runtimeType) {
       'declarative' => 'content/',
       'web' => 'web/',
@@ -199,44 +232,59 @@ class ModManifestV1Validator {
       throw FormatException('runtime.entrypoint 必须位于 $expectedPrefix 目录');
     }
 
+    // ========== 宿主兼容性 & 平台声明 ==========
     final compatibility = _object(manifest['compatibility'], 'compatibility');
     _checkKeys(compatibility, const {'hostApi', 'platforms'}, 'compatibility');
+    // 宿主 API 版本范围（^ / ~ / 固定版本）
     _validateSemVerRange(_requiredString(compatibility, 'hostApi', 100), 'compatibility.hostApi');
+    // 支持平台列表，至少一个、最多 6 个，只能是白名单内平台
     _stringList(compatibility['platforms'], 'compatibility.platforms',
         minItems: 1, maxItems: 6, allowed: _platforms);
 
+    // ========== UI 展示模式配置 ==========
     final ui = _object(manifest['ui'], 'ui');
     _checkKeys(ui, const {'allowedModes', 'defaultMode'}, 'ui');
+    // 允许的弹窗/展示模式，1~3 种，只能取自白名单
     final allowedModes = _stringList(ui['allowedModes'], 'ui.allowedModes',
         minItems: 1, maxItems: 3, allowed: _uiModes);
     final defaultMode = _requiredString(ui, 'defaultMode', 32);
+    // 默认模式必须在允许列表里面
     if (!_uiModes.contains(defaultMode) || !allowedModes.contains(defaultMode)) {
       throw const FormatException('ui.defaultMode 必须包含在 ui.allowedModes 中');
     }
 
+    // ========== 沙箱隔离存储 storage.local ==========
     final storage = _object(manifest['storage'], 'storage');
     _checkKeys(storage, const {'local'}, 'storage');
     final local = _object(storage['local'], 'storage.local');
     _checkKeys(local, const {'enabled', 'quotaMiB', 'persistent'}, 'storage.local');
     final storageEnabled = local['enabled'];
     final persistent = local['persistent'];
+    // 开关、持久化标记只能是布尔
     if (storageEnabled is! bool || persistent is! bool) {
       throw const FormatException('storage.local.enabled/persistent 必须为布尔值');
     }
+    // 存储配额：0 ~ 2048 MiB
     final quotaMiB = _integer(local['quotaMiB'], 'storage.local.quotaMiB', 0, 2048);
+    // 如果开启存储，配额必须 >0
     if (storageEnabled && quotaMiB < 1) {
       throw const FormatException('启用 storage.local 时 quotaMiB 必须大于 0');
     }
+    // 如果关闭存储：配额必须是 0，并且不能开启持久化
     if (!storageEnabled && (quotaMiB != 0 || persistent)) {
       throw const FormatException('禁用 storage.local 时 quotaMiB 必须为 0 且 persistent 必须为 false');
     }
 
+    // ========== 权限校验 + 核心安全隔离规则 ==========
+    // 进入权限子校验，返回权限 Map
     final permissions = _validatePermissions(manifest['permissions']);
     final permissionNames = permissions.keys.toSet();
+    // 存储开关 和 storage.local 权限必须保持一致，不能一边开一边不申请权限
     if (storageEnabled != permissionNames.contains('storage.local')) {
       throw const FormatException('storage.local.enabled 必须与 storage.local 权限声明一致');
     }
 
+    // V1 最重要隔离：不能同时持有宿主业务数据权限 + 外发（网络/跨模组）权限
     final hasHostBusiness = permissionNames.any(_hostBusinessCapabilities.contains);
     final hasEgress = permissionNames.any(_egressCapabilities.contains);
     if (hasHostBusiness && hasEgress) {
@@ -245,6 +293,7 @@ class ModManifestV1Validator {
       );
     }
 
+    // 业务强制权限：特定 contentKind 必须携带指定权限
     if (contentKind == 'task_template' && !permissionNames.contains('host.tasks.create')) {
       throw const FormatException('task_template 必须声明 host.tasks.create');
     }
@@ -252,23 +301,28 @@ class ModManifestV1Validator {
       throw const FormatException('link_hub 必须声明 host.external_link.open');
     }
 
+    // ========== MOD 依赖校验 ==========
+    // dependencies 可选；不传则是空数组
     final dependencies = manifest.containsKey('dependencies')
         ? manifest['dependencies']
         : const <dynamic>[];
     _validateDependencies(dependencies, id);
 
+    // ========== 静态资源（图标）校验，可选 ==========
     if (manifest.containsKey('assets')) {
       final assets = _object(manifest['assets'], 'assets');
       _checkKeys(assets, const {'icon'}, 'assets');
       if (assets.containsKey('icon')) {
         final icon = _requiredString(assets, 'icon', 240);
         _validatePackagePath(icon, 'assets.icon');
+        // 图标文件强制放在 assets/ 目录下
         if (!icon.startsWith('assets/')) {
           throw const FormatException('assets.icon 必须位于 assets/ 目录');
         }
       }
     }
   }
+
 
   Map<String, Map<String, dynamic>> _validatePermissions(Object? value) {
     if (value is! List || value.length > maxPermissions) {
@@ -411,7 +465,7 @@ class ModManifestV1Validator {
     }
   }
 
-  static void _validateSemVer(String value, String field) {
+  static void _validateSemVer(String value, String field) {   //校验**精确版本号**
     if (value.length > 64) throw FormatException('$field 最长 64 个字符');
     final match = _semVerPattern.firstMatch(value);
     if (match == null) throw FormatException('$field 必须符合 SemVer 2.0.0');
@@ -546,14 +600,25 @@ class ModManifestV1Validator {
 
 /// Small RFC 8259 reader that rejects duplicate object keys before Dart's
 /// ordinary jsonDecode can silently overwrite them.
+/// 严格 JSON 读取器：递归下降解析器
+/// 在标准 JSON 基础上增加安全与合规约束，专门用于解析模组 manifest，
+/// 拦截畸形 JSON、JSON 深度炸弹、重复 key、非法 Unicode、尾随脏数据等问题。
 class _StrictJsonReader {
+  /// 传入原始 JSON 字符串
   _StrictJsonReader(this.source);
 
+  /// JSON 原始文本
   final String source;
-  int _index = 0;
-  static final RegExp _number =
-      RegExp(r'-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?');
 
+  /// 当前读取游标位置，从左向右逐个消费字符
+  int _index = 0;
+
+  /// JSON 数字正则，匹配标准 JSON 数字格式，不允许 NaN / Infinity / 前导零
+  static final RegExp _number =
+  RegExp(r'-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?');
+
+  /// 解析入口：对外唯一调用方法
+  /// 整体校验：首尾空白跳过，解析完成后不能存在多余尾随字符
   Object? parse() {
     _space();
     final value = _value(0);
@@ -564,6 +629,8 @@ class _StrictJsonReader {
     return value;
   }
 
+  /// 解析一个 JSON 值（对象 / 数组 / 字符串 / 数字 / true / false / null）
+  /// [depth] 当前递归深度，用于限制最大嵌套层数，防栈溢出
   Object? _value(int depth) {
     if (depth > 32) throw const FormatException('JSON 嵌套层级超过 32');
     _space();
@@ -578,8 +645,10 @@ class _StrictJsonReader {
     return _numeric();
   }
 
+  /// 解析 JSON 对象 { ... }
+  /// 强制：key 必须是字符串，不允许同一个对象内出现重复 key
   Map<String, dynamic> _object(int depth) {
-    _index++; // {
+    _index++; // 消费 '{'
     _space();
     final result = <String, dynamic>{};
     final keys = <String>{};
@@ -600,8 +669,9 @@ class _StrictJsonReader {
     }
   }
 
+  /// 解析 JSON 数组 [ ... ]
   List<dynamic> _array(int depth) {
-    _index++; // [
+    _index++; // 消费 '['
     _space();
     final result = <dynamic>[];
     if (_take(']')) return result;
@@ -613,6 +683,8 @@ class _StrictJsonReader {
     }
   }
 
+  /// 解析 JSON 字符串 "..."
+  /// 严格校验：控制字符、转义序列、\u 四位十六进制、非法代理对
   String _string() {
     final start = _index;
     _expect('"');
@@ -650,6 +722,8 @@ class _StrictJsonReader {
     throw const FormatException('JSON 字符串未闭合');
   }
 
+  /// 检测字符串是否存在孤立、不配对的 UTF-16 代理项
+  /// 单独的高代理 / 单独的低代理属于非法 Unicode
   bool _hasUnpairedSurrogate(String value) {
     for (var i = 0; i < value.length; i++) {
       final unit = value.codeUnitAt(i);
@@ -665,6 +739,7 @@ class _StrictJsonReader {
     return false;
   }
 
+  /// 解析 JSON 数字
   Object? _numeric() {
     final match = _number.matchAsPrefix(source, _index);
     if (match == null) throw const FormatException('JSON 值无效');
@@ -673,12 +748,14 @@ class _StrictJsonReader {
     return jsonDecode(token) as num;
   }
 
+  /// 解析字面量 true / false / null，大小写严格匹配
   Object? _literal(String token, Object? value) {
     if (!source.startsWith(token, _index)) throw const FormatException('JSON 字面量无效');
     _index += token.length;
     return value;
   }
 
+  /// 跳过标准空白字符：空格、制表符、换行、回车
   void _space() {
     while (_index < source.length) {
       final code = source.codeUnitAt(_index);
@@ -690,6 +767,7 @@ class _StrictJsonReader {
     }
   }
 
+  /// 尝试消费指定单个字符；成功则游标前进，返回 true
   bool _take(String char) {
     if (_index < source.length && source[_index] == char) {
       _index++;
@@ -698,7 +776,9 @@ class _StrictJsonReader {
     return false;
   }
 
+  /// 必须消费指定字符，如果不是预期字符直接抛异常
   void _expect(String char) {
     if (!_take(char)) throw FormatException('JSON 预期字符：$char');
   }
 }
+

@@ -23,13 +23,20 @@ void main() {
     if (await temp.exists()) await temp.delete(recursive: true);
   });
 
+  test('validateBytes previews a valid package without writing files', () async {
+    final package = installer.validateBytes(_zip(_validFiles()));
+    expect(package.manifest['id'], 'com.example.reading');
+    expect(package.taskTemplates.templates, hasLength(1));
+    expect(await installRoot.exists(), isFalse);
+  });
+
   test('installs a valid task-template ZIP into its own directory', () async {
     final result = await installer.installBytes(_zip(_validFiles()));
     expect(result.modId, 'com.example.reading');
     expect(result.version, '1.0.0');
-    expect(await File('${result.installDirectory.path}/manifest.json').exists(), isTrue);
+    expect(await File('${result.installDirectoryPath}/manifest.json').exists(), isTrue);
     expect(await File(
-      '${result.installDirectory.path}/content/task-templates.json',
+      '${result.installDirectoryPath}/content/task-templates.json',
     ).exists(), isTrue);
     expect(result.archiveSha256, hasLength(64));
   });
@@ -96,10 +103,10 @@ void main() {
   test('successful upgrade atomically replaces the previous version', () async {
     final first = await installer.installBytes(_zip(_validFiles(version: '1.0.0')));
     final second = await installer.installBytes(_zip(_validFiles(version: '1.1.0')));
-    expect(second.installDirectory.path, first.installDirectory.path);
+    expect(second.installDirectoryPath, first.installDirectoryPath);
     expect(second.version, '1.1.0');
     final manifest = jsonDecode(await File(
-      '${second.installDirectory.path}/manifest.json',
+      '${second.installDirectoryPath}/manifest.json',
     ).readAsString()) as Map<String, dynamic>;
     expect(manifest['version'], '1.1.0');
     final leftovers = await installRoot.list().toList();
@@ -110,14 +117,14 @@ void main() {
   test('invalid replacement leaves the existing installation untouched', () async {
     final first = await installer.installBytes(_zip(_validFiles()));
     final original = await File(
-      '${first.installDirectory.path}/manifest.json',
+      '${first.installDirectoryPath}/manifest.json',
     ).readAsString();
     await expectLater(
       installer.installBytes(<int>[0, 1, 2, 3, 4]),
       throwsA(isA<FormatException>()),
     );
     expect(await File(
-      '${first.installDirectory.path}/manifest.json',
+      '${first.installDirectoryPath}/manifest.json',
     ).readAsString(), original);
   });
 }

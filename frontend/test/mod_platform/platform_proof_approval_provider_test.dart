@@ -126,7 +126,8 @@ void main() {
     auth = _TestAuthSession();
     algorithm = Ed25519();
     keyPair = await algorithm.newKeyPair();
-    final publicKey = await keyPair.extractPublicKey();
+    final publicKey =
+    await keyPair.extractPublicKey() as SimplePublicKey;
     final der = <int>[...x509Prefix, ...publicKey.bytes];
     keyId = crypto.sha256.convert(der).toString();
     publicKeyX509Base64 = base64.encode(der);

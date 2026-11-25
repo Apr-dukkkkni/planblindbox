@@ -6,7 +6,7 @@ import 'mod_permission_policy.dart';
 import '../storage/mod_platform_store.dart';
 import 'mod_runtime_session.dart';
 
-export 'mod_permission_policy.dart' show DenyAllModApprovalProvider, ModApprovalProvider, ModApprovalRequest;
+export 'mod_permission_policy.dart' show DenyAllModApprovalProvider, ModApprovalProvider, ModApprovalRequest, ModCapabilityProofApprovalProvider, VerifiedModCapabilityProof;
 
 class ModCapabilityDeniedException extends StateError {
   ModCapabilityDeniedException(super.message);
@@ -20,6 +20,7 @@ class ModUserConsent {
     required this.capability,
     required this.payloadFingerprint,
     required this.expiresAt,
+    required this.proof,
   });
 
   final String nonce;
@@ -28,6 +29,7 @@ class ModUserConsent {
   final String capability;
   final String payloadFingerprint;
   final DateTime expiresAt;
+  final VerifiedModCapabilityProof? proof;
 }
 
 class ModHostApiResult {
@@ -181,6 +183,7 @@ class ModCapabilityBroker {
       capability: capability,
       payloadFingerprint: _fingerprintPayload(payload),
       expiresAt: now.add(const Duration(seconds: 30)),
+      proof: decision.proof,
     );
     _pendingConsents[consent.nonce] = consent;
     return consent;
@@ -198,6 +201,7 @@ class ModCapabilityBroker {
         pending.installationId != session.installationId ||
         pending.capability != capability ||
         pending.payloadFingerprint != _fingerprintPayload(payload) ||
+        pending.proof?.token != consent.proof?.token ||
         consent.sessionId != session.sessionId ||
         consent.installationId != session.installationId ||
         consent.capability != capability ||
@@ -207,7 +211,12 @@ class ModCapabilityBroker {
       throw ModCapabilityDeniedException('用户确认凭据无效、过期或已经使用');
     }
 
-    final decision = await _policy.authorize(session, capability, payload);
+    final decision = await _policy.authorize(
+      session,
+      capability,
+      payload,
+      existingProof: pending.proof,
+    );
     if (!decision.isAllowed) {
       await _recordDenied(session, capability);
       throw ModCapabilityDeniedException(decision.reason ?? '权限检查失败');

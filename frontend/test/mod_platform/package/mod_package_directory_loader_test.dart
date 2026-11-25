@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plan_blind_box/mod_platform/package/mod_package_directory_loader.dart';
-import 'package:plan_blind_box/mod_platform/package/mod_package_validator.dart';
+import 'package:plan_blind_box/mod_platform/runtime/declarative_mod_runtime.dart';
 
 void main() {
   late Directory temp;
@@ -12,6 +12,34 @@ void main() {
   late Directory packageDirectory;
   late Map<String, List<int>> files;
   late Map<String, dynamic> installation;
+
+  Future<void> _writePackage() async {
+    for (final entry in files.entries) {
+      final output = File(
+        '${packageDirectory.path}${Platform.pathSeparator}${entry.key.replaceAll('/', Platform.pathSeparator)}',
+      );
+      await output.parent.create(recursive: true);
+      await output.writeAsBytes(entry.value, flush: true);
+    }
+  }
+
+  Map<String, dynamic> _installation() => {
+    'isV1Package': true,
+    'manifestVersion': 1,
+    'contentKind': 'task_template',
+    'installedModId': 'com.example.reading',
+    'installedVersion': '1.0.0',
+    'publisherId': 'com.example.publisher',
+    'installationId': 'test-installation-v1',
+    'effectiveProfile': 'host_integrated_offline',
+    'packageDirectory': packageDirectory.path,
+    'fileDigests': {
+      for (final entry in files.entries)
+        if (entry.key != 'integrity.json')
+          entry.key: sha256.convert(entry.value).toString(),
+    },
+    'sourceManifest': jsonDecode(utf8.decode(files['manifest.json']!)),
+  };
 
   setUp(() async {
     temp = await Directory.systemTemp.createTemp('pb-package-loader-');
@@ -34,6 +62,34 @@ void main() {
     ).load(installation);
     expect(loaded.manifest['id'], 'com.example.reading');
     expect(loaded.taskTemplates.templates.single['title'], '每天阅读');
+  });
+
+  test('verified V1 package becomes a data-only DeclarativeModDefinition', () async {
+    final loaded = await ModPackageDirectoryLoader(
+      installationRoot: root,
+    ).load(installation);
+    final definition = DeclarativeModDefinition.fromValidatedV1Package(
+      installation,
+      loaded,
+    );
+    expect(definition.modId, 'com.example.reading');
+    expect(definition.name, 'Reading templates');
+    expect(definition.version, '1.0.0');
+    expect(definition.publisherId, 'com.example.publisher');
+    expect(definition.installationId, 'test-installation-v1');
+    expect(definition.taskTemplates, hasLength(1));
+    expect(definition.taskTemplates.single.payload['title'], '每天阅读');
+  });
+
+  test('rejects V1 definition when installation identity does not match', () async {
+    final loaded = await ModPackageDirectoryLoader(
+      installationRoot: root,
+    ).load(installation);
+    installation['publisherId'] = 'attacker.publisher';
+    expect(
+      () => DeclarativeModDefinition.fromValidatedV1Package(installation, loaded),
+      throwsA(isA<FormatException>()),
+    );
   });
 
   test('rejects changed content even if database cache is unchanged', () async {
@@ -77,31 +133,6 @@ void main() {
     );
   });
 
-  Future<void> _writePackage() async {
-    for (final entry in files.entries) {
-      final output = File(
-        '${packageDirectory.path}${Platform.pathSeparator}${entry.key.replaceAll('/', Platform.pathSeparator)}',
-      );
-      await output.parent.create(recursive: true);
-      await output.writeAsBytes(entry.value, flush: true);
-    }
-  }
-
-  Map<String, dynamic> _installation() => {
-    'isV1Package': true,
-    'manifestVersion': 1,
-    'contentKind': 'task_template',
-    'installedModId': 'com.example.reading',
-    'installedVersion': '1.0.0',
-    'publisherId': 'com.example.publisher',
-    'packageDirectory': packageDirectory.path,
-    'fileDigests': {
-      for (final entry in files.entries)
-        if (entry.key != 'integrity.json')
-          entry.key: sha256.convert(entry.value).toString(),
-    },
-    'sourceManifest': jsonDecode(utf8.decode(files['manifest.json']!)),
-  };
 }
 
 Map<String, List<int>> _validFiles() {

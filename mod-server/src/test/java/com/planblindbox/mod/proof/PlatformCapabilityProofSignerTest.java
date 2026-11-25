@@ -114,6 +114,58 @@ class PlatformCapabilityProofSignerTest {
     }
 
     @Test
+    void verifiesCompactProofAndRejectsTamperingOrRevokedSigningKey() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
+        KeyPair activePair = generator.generateKeyPair();
+        PlatformCapabilityProofSigner signer = new PlatformCapabilityProofSigner(
+                key(activePair), MAPPER, "test-platform", 300);
+        String token = signer.issue(Map.of("sub", "42", "modId", "com.example.test")).token();
+        assertEquals("42", signer.verify(token).get("sub"));
+
+        String[] parts = token.split("\\.");
+        String tamperedPayload = (parts[1].startsWith("A") ? "B" : "A") + parts[1].substring(1);
+        String tampered = parts[0] + "." + tamperedPayload + "." + parts[2];
+        assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ResponseStatusException.class,
+                () -> signer.verify(tampered)).getStatusCode());
+
+        KeyPair nextPair = generator.generateKeyPair();
+        String revokedRing = keyRingJson(List.of(
+                keyEntry(nextPair, "ACTIVE", true),
+                keyEntry(activePair, "REVOKED", false)));
+        PlatformCapabilityProofSigner afterRevocation = new PlatformCapabilityProofSigner(
+                new PlatformProofSigningKey("", "", revokedRing, keyId(nextPair)), MAPPER, "test-platform", 300);
+        assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ResponseStatusException.class,
+                () -> afterRevocation.verify(token)).getStatusCode());
+    }
+
+    @Test
+    void rejectsExpiredCompactProof() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
+        KeyPair pair = generator.generateKeyPair();
+        PlatformProofSigningKey key = key(pair);
+        PlatformCapabilityProofSigner signer = new PlatformCapabilityProofSigner(
+                key, MAPPER, "test-platform", 300);
+        long now = java.time.Instant.now().getEpochSecond();
+        Map<String, Object> header = Map.of("alg", "EdDSA", "typ", "JWT", "kid", key.keyId());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("iss", "test-platform");
+        payload.put("aud", "planblindbox-mod-capability");
+        payload.put("proofType", "MOD_CAPABILITY_AUTHORIZATION");
+        payload.put("iat", now - 60);
+        payload.put("nbf", now - 60);
+        payload.put("exp", now - 1);
+        payload.put("jti", java.util.UUID.randomUUID().toString());
+        String encodedHeader = Base64.getUrlEncoder().withoutPadding().encodeToString(MAPPER.writeValueAsBytes(header));
+        String encodedPayload = Base64.getUrlEncoder().withoutPadding().encodeToString(MAPPER.writeValueAsBytes(payload));
+        String signingInput = encodedHeader + "." + encodedPayload;
+        String expired = signingInput + "." + Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(key.sign(signingInput.getBytes(StandardCharsets.US_ASCII)));
+
+        assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ResponseStatusException.class,
+                () -> signer.verify(expired)).getStatusCode());
+    }
+
+    @Test
     void oldProofRemainsVerifiableAfterRotationAndNewProofUsesNewActiveKey() throws Exception {
         KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
         KeyPair oldPair = generator.generateKeyPair();
@@ -141,6 +193,7 @@ class PlatformCapabilityProofSignerTest {
         assertEquals(true, oldMetadata.get("canVerify"));
         assertEquals(false, oldMetadata.get("canSign"));
         assertTrue(verifies(oldProof, (String) oldMetadata.get("publicKeyX509Base64")));
+        assertEquals("42", rotatedSigner.verify(oldProof).get("sub"));
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> publishedKeys = (List<Map<String, Object>>) rotatedSigner.publicKeys().get("keys");

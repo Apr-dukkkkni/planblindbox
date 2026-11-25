@@ -600,13 +600,15 @@ class _ProfilePageState extends State<ProfilePage> {
         birthday: _birthdayString,
       );
       await widget.session.setProfile(user);
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('资料已保存')));
+      }
     } on AuthApiException catch (e) {
-      if (e.statusCode == 401 || e.statusCode == 403)
+      if (e.statusCode == 401 || e.statusCode == 403) {
         await widget.session.expireSession();
+      }
       if (mounted) showAuthError(context, e);
     } catch (e) {
       if (mounted) showAuthError(context, e);
@@ -639,8 +641,9 @@ class _ProfilePageState extends State<ProfilePage> {
           : await widget.session.api.uploadAvatar(token, picked!);
       await widget.session.setProfile(profile);
     } on AuthApiException catch (e) {
-      if (e.statusCode == 401 || e.statusCode == 403)
+      if (e.statusCode == 401 || e.statusCode == 403) {
         await widget.session.expireSession();
+      }
       if (mounted) showAuthError(context, e);
     } catch (e) {
       if (mounted) showAuthError(context, e);
@@ -662,8 +665,9 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() => _busy = true);
     try {
       await widget.session.logout(localOnly: localOnly);
-      if (mounted && Navigator.of(context).canPop())
+      if (mounted && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
+      }
     } catch (e) {
       if (mounted) showAuthError(context, e);
     } finally {
@@ -793,8 +797,9 @@ class _ProfilePageState extends State<ProfilePage> {
                                     lastDate: DateTime.now(),
                                     initialDate: _birthday ?? DateTime(2000),
                                   );
-                                  if (mounted && picked != null)
+                                  if (mounted && picked != null) {
                                     setState(() => _birthday = picked);
+                                  }
                                 },
                         ),
                         IconButton(

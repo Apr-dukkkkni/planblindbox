@@ -5,9 +5,67 @@ import '../storage/mod_platform_store.dart';
 import 'mod_runtime_session.dart';
 
 /// Approval data must come from a trusted, signature-verified platform source.
-/// The production default denies all capabilities until that integration exists.
+/// The broker's default provider denies all capabilities; production host
+/// surfaces explicitly inject PlatformProofApprovalProvider.
 abstract interface class ModApprovalProvider {
   Future<Set<String>> approvedCapabilities(ModApprovalRequest request);
+}
+
+/// Stronger provider contract used by the production platform integration.
+/// The proof is held only in host memory and bound to one local Runtime Session.
+abstract interface class ModCapabilityProofApprovalProvider
+    implements ModApprovalProvider {
+  Future<VerifiedModCapabilityProof?> issueAndVerifyProof(
+    ModApprovalRequest request,
+  );
+
+  Future<bool> verifyExistingProof(
+    ModApprovalRequest request,
+    VerifiedModCapabilityProof proof,
+  );
+}
+
+class VerifiedModCapabilityProof {
+  const VerifiedModCapabilityProof({
+    required this.token,
+    required this.keyId,
+    required this.jti,
+    required this.expiresAt,
+    required this.ownerId,
+    required this.installationId,
+    required this.sessionId,
+    required this.modId,
+    required this.publisherId,
+    required this.version,
+    required this.packageSha256,
+    required this.manifestSha256,
+    required this.capability,
+  });
+
+  final String token;
+  final String keyId;
+  final String jti;
+  final DateTime expiresAt;
+  final int ownerId;
+  final String installationId;
+  final String sessionId;
+  final String modId;
+  final String publisherId;
+  final String version;
+  final String? packageSha256;
+  final String manifestSha256;
+  final String capability;
+
+  bool matches(ModApprovalRequest request) =>
+      ownerId == request.ownerId &&
+      installationId == request.installationId &&
+      sessionId == request.sessionId &&
+      modId == request.modId &&
+      publisherId == request.publisherId &&
+      version == request.version &&
+      packageSha256 == request.packageSha256 &&
+      manifestSha256 == request.manifestSha256 &&
+      capability == request.capability;
 }
 
 class DenyAllModApprovalProvider implements ModApprovalProvider {
@@ -22,29 +80,36 @@ class ModApprovalRequest {
   const ModApprovalRequest({
     required this.ownerId,
     required this.installationId,
+    required this.sessionId,
     required this.modId,
     required this.publisherId,
     required this.version,
     required this.packageSha256,
+    required this.manifestSha256,
     required this.capability,
   });
 
   final int ownerId;
   final String installationId;
+  final String sessionId;
   final String modId;
   final String publisherId;
   final String version;
   final String? packageSha256;
+  final String? manifestSha256;
   final String capability;
 }
 
 class ModPermissionDecision {
-  const ModPermissionDecision.allowed(this.installation)
+  const ModPermissionDecision.allowed(this.installation, {this.proof})
       : reason = null;
-  const ModPermissionDecision.denied(this.reason) : installation = null;
+  const ModPermissionDecision.denied(this.reason)
+      : installation = null,
+        proof = null;
 
   final Map<String, dynamic>? installation;
   final String? reason;
+  final VerifiedModCapabilityProof? proof;
   bool get isAllowed => installation != null;
 }
 
@@ -70,8 +135,9 @@ class ModPermissionPolicy {
   Future<ModPermissionDecision> authorize(
     ModRuntimeSession session,
     String capability,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    VerifiedModCapabilityProof? existingProof,
+  }) async {
     if (!_sessionManager.isActive(session)) {
       return const ModPermissionDecision.denied('Runtime Session 已失效');
     }
@@ -204,24 +270,10 @@ class ModPermissionPolicy {
     if (!hasUserGrant) {
       return const ModPermissionDecision.denied('用户尚未授予此权限');
     }
-
-    final approvalRequest = ModApprovalRequest(
-      ownerId: _store.ownerId,
-      installationId: session.installationId,
-      modId: session.modId,
-      publisherId: installation['publisherId'] as String,
-      version: installation['installedVersion'] as String,
-      packageSha256: installation['packageSha256'] as String?,
-      capability: capability,
-    );
-    Set<String> approved;
-    try {
-      approved = await _approvalProvider.approvedCapabilities(approvalRequest);
-    } catch (_) {
-      return const ModPermissionDecision.denied('平台审批状态不可用，已按拒绝处理');
-    }
-    if (!approved.contains(capability)) {
-      return const ModPermissionDecision.denied('此 capability 尚未获得平台管理员审批');
+    if (!isLegacy && !session.verifiedRuntime) {
+      return const ModPermissionDecision.denied(
+        'V1 Host API Session 必须来自已验证的 Declarative Runtime',
+      );
     }
 
     final scope = declared['scope'];
@@ -235,11 +287,75 @@ class ModPermissionPolicy {
         return const ModPermissionDecision.denied('请求字段超出授权 Scope');
       }
     }
-    if (!isLegacy && !session.verifiedRuntime) {
-      return const ModPermissionDecision.denied(
-        'V1 Host API Session 必须来自已验证的 Declarative Runtime',
-      );
+
+    final fileDigests = installation['fileDigests'];
+    final rawManifestDigest = fileDigests is Map
+        ? fileDigests['manifest.json']
+        : null;
+    final manifestSha256 = rawManifestDigest is String
+        ? rawManifestDigest
+        : null;
+    final approvalRequest = ModApprovalRequest(
+      ownerId: _store.ownerId,
+      installationId: session.installationId,
+      sessionId: session.sessionId,
+      modId: session.modId,
+      publisherId: installation['publisherId'] as String,
+      version: installation['installedVersion'] as String,
+      packageSha256: installation['packageSha256'] as String?,
+      manifestSha256: manifestSha256,
+      capability: capability,
+    );
+
+    // V1 host-integrated operations require a server-issued proof bound to the
+    // exact local installation and Session. Legacy/test providers retain the
+    // old approval interface, but the production proof provider fails closed
+    // for packages without a verified manifest digest.
+    if (_approvalProvider is ModCapabilityProofApprovalProvider) {
+      if (isLegacy || manifestSha256 == null ||
+          !RegExp(r'^[a-f0-9]{64}$').hasMatch(manifestSha256)) {
+        return const ModPermissionDecision.denied(
+          'V1 Manifest 摘要缺失，无法验证平台授权证明',
+        );
+      }
+      try {
+        final provider = _approvalProvider as ModCapabilityProofApprovalProvider;
+        if (existingProof != null) {
+          if (!existingProof.matches(approvalRequest) ||
+              !await provider.verifyExistingProof(approvalRequest, existingProof)) {
+            return const ModPermissionDecision.denied(
+              '平台授权证明已失效或与当前 Runtime Session 不匹配',
+            );
+          }
+          return ModPermissionDecision.allowed(installation, proof: existingProof);
+        }
+        final proof = await provider.issueAndVerifyProof(approvalRequest);
+        if (proof == null || !proof.matches(approvalRequest)) {
+          return const ModPermissionDecision.denied(
+            '平台未签发与当前 MOD 安装及 Session 匹配的授权证明',
+          );
+        }
+        return ModPermissionDecision.allowed(installation, proof: proof);
+      } catch (_) {
+        return const ModPermissionDecision.denied(
+          '平台授权证明不可用或在线验证失败，已按拒绝处理',
+        );
+      }
     }
+
+    if (existingProof != null) {
+      return const ModPermissionDecision.denied('当前审批提供方不支持授权证明');
+    }
+    Set<String> approved;
+    try {
+      approved = await _approvalProvider.approvedCapabilities(approvalRequest);
+    } catch (_) {
+      return const ModPermissionDecision.denied('平台审批状态不可用，已按拒绝处理');
+    }
+    if (!approved.contains(capability)) {
+      return const ModPermissionDecision.denied('此 capability 尚未获得平台管理员审批');
+    }
+
     return ModPermissionDecision.allowed(installation);
   }
 

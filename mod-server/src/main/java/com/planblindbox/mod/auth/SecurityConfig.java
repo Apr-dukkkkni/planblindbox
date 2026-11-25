@@ -79,10 +79,17 @@ public class SecurityConfig {
                                 "/api/v1/auth/password/forgot",
                                 "/api/v1/auth/password/reset").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/avatars/**").permitAll()
+                        // Platform proof verification keys are public; issuing a proof remains authenticated.
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/v1/mod-platform/keys",
+                                "/api/v1/mod-platform/keys/*").permitAll()
+                        // Manifest bytes and Publisher public-key metadata are public verification
+                        // resources. Clients must be able to verify a release before login.
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/v1/mods/*/versions/*/manifest",
+                                "/api/v1/publishers/*/keys/*").permitAll()
                         .requestMatchers(HttpMethod.POST,
                                 "/api/v1/mods/*/versions/*/download").authenticated()
-                        .requestMatchers(HttpMethod.GET,
-                                "/api/v1/mods/*/versions/*/manifest").authenticated()
                         .requestMatchers(HttpMethod.GET,
                                 "/api/v1/mods",
                                 "/api/v1/mods/ranking",

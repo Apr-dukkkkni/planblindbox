@@ -1,0 +1,53 @@
+{
+  "manifestVersion": 1,
+  "id": "com.planblindbox.test.task",
+  "version": "1.0.0",
+  "name": {
+    "zh-CN": "联调任务模板",
+    "en": "Integration Task Template"
+  },
+  "description": "BE-3E-2 开发环境联调专用，不含可执行代码",
+  "publisher": {
+    "id": "com.planblindbox.testpublisher"
+  },
+  "type": "content",
+  "contentKind": "task_template",
+  "runtime": {
+    "type": "declarative",
+    "apiVersion": "1",
+    "entrypoint": "content/task-templates.json"
+  },
+  "compatibility": {
+    "hostApi": "^1.0.0",
+    "platforms": [
+      "android",
+      "ios",
+      "web",
+      "windows",
+      "macos",
+      "linux"
+    ]
+  },
+  "ui": {
+    "allowedModes": [
+      "modal"
+    ],
+    "defaultMode": "modal"
+  },
+  "storage": {
+    "local": {
+      "enabled": false,
+      "quotaMiB": 0,
+      "persistent": false
+    }
+  },
+  "permissions": [
+    {
+      "capability": "host.tasks.create",
+      "required": true,
+      "reason": "用户确认后，使用选定模板创建一条任务"
+    }
+  ],
+  "dependencies": [],
+  "assets": {}
+}

@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:plan_blind_box/data/local/local_database.dart';
 import 'package:plan_blind_box/data/local/local_plan_repository.dart';
 import 'package:plan_blind_box/mod_platform/runtime/mod_capability_broker.dart';
+import 'package:plan_blind_box/mod_platform/runtime/mod_permission_policy.dart';
+import 'package:plan_blind_box/mod_platform/manifest/mod_manifest_v1_validator.dart';
 import 'package:plan_blind_box/mod_platform/runtime/mod_runtime_session.dart';
 import 'package:plan_blind_box/services/mod_registry.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -14,6 +16,50 @@ class _ApprovedProvider implements ModApprovalProvider {
       request.publisherId == 'publisher.example'
           ? const {'host.tasks.create'}
           : const <String>{};
+}
+
+
+class _ProofProvider implements ModCapabilityProofApprovalProvider {
+  bool allowExistingProof;
+  int issueCount = 0;
+  int verifyCount = 0;
+
+  _ProofProvider({this.allowExistingProof = true});
+
+  @override
+  Future<Set<String>> approvedCapabilities(ModApprovalRequest request) async =>
+      const <String>{};
+
+  @override
+  Future<VerifiedModCapabilityProof?> issueAndVerifyProof(
+    ModApprovalRequest request,
+  ) async {
+    issueCount++;
+    return VerifiedModCapabilityProof(
+      token: 'test-platform-jws',
+      keyId: ''.padLeft(64, 'c'),
+      jti: 'test-jti',
+      expiresAt: DateTime.now().toUtc().add(const Duration(minutes: 5)),
+      ownerId: request.ownerId,
+      installationId: request.installationId,
+      sessionId: request.sessionId,
+      modId: request.modId,
+      publisherId: request.publisherId,
+      version: request.version,
+      packageSha256: request.packageSha256,
+      manifestSha256: request.manifestSha256!,
+      capability: request.capability,
+    );
+  }
+
+  @override
+  Future<bool> verifyExistingProof(
+    ModApprovalRequest request,
+    VerifiedModCapabilityProof proof,
+  ) async {
+    verifyCount++;
+    return allowExistingProof && proof.matches(request);
+  }
 }
 
 void main() {
@@ -50,6 +96,21 @@ void main() {
         'apiVersion': '1',
         'entrypoint': 'content/task-templates.json',
       },
+      'compatibility': {
+        'hostApi': '^1.0.0',
+        'platforms': ['android'],
+      },
+      'ui': {
+        'allowedModes': ['modal'],
+        'defaultMode': 'modal',
+      },
+      'storage': {
+        'local': {
+          'enabled': false,
+          'quotaMiB': 0,
+          'persistent': false,
+        },
+      },
       'permissions': [
         {
           'capability': 'host.tasks.create',
@@ -59,6 +120,8 @@ void main() {
       ],
       'dependencies': <String>[],
     };
+    // Fail at fixture setup if this test ever drifts from the strict V1 schema.
+    ModManifestV1Validator().parse(jsonEncode(manifest));
     final store = registry;
     // Persist the same host-owned projection produced by installV1Package.
     final db = await repository.localDatabase.database;
@@ -322,4 +385,98 @@ void main() {
     );
     expect(await repository.getAllTasks(), isEmpty);
   });
+
+  test('V1 Host API 在确认时签发 Session 绑定证明，执行前再次在线验证', () async {
+    await installV1();
+    await registry.grantPermission(
+      'com.example.v1permission',
+      'host.tasks.create',
+    );
+    final proofProvider = _ProofProvider();
+    final broker = ModCapabilityBroker.forRepository(
+      repository,
+      approvalProvider: proofProvider,
+      sessionManager: sessions,
+    );
+    final session = sessions.open(
+      ownerId: repository.modOwnerId,
+      installationId: 'test-v1-installation',
+      modId: 'com.example.v1permission',
+      verifiedRuntime: true,
+    );
+    const payload = {
+      'title': '阅读十页',
+      'note': '由 V1 模板声明',
+      'targetCount': 10,
+      'importance': 3,
+      'difficulty': 2,
+    };
+
+    final consent = await broker.issueUserConsent(
+      session: session,
+      capability: 'host.tasks.create',
+      payload: payload,
+    );
+    expect(consent.proof, isNotNull);
+    expect(proofProvider.issueCount, 1);
+    expect(proofProvider.verifyCount, 0);
+
+    final result = await broker.invoke(
+      session: session,
+      capability: 'host.tasks.create',
+      payload: payload,
+      consent: consent,
+    );
+    expect(result.status, 'created');
+    expect(proofProvider.issueCount, 1);
+    expect(proofProvider.verifyCount, 1);
+    expect(await repository.getAllTasks(), hasLength(1));
+  });
+
+  test('确认后若平台在线复核发现撤权，Host API 不写入本地任务', () async {
+    await installV1();
+    await registry.grantPermission(
+      'com.example.v1permission',
+      'host.tasks.create',
+    );
+    final proofProvider = _ProofProvider();
+    final broker = ModCapabilityBroker.forRepository(
+      repository,
+      approvalProvider: proofProvider,
+      sessionManager: sessions,
+    );
+    final session = sessions.open(
+      ownerId: repository.modOwnerId,
+      installationId: 'test-v1-installation',
+      modId: 'com.example.v1permission',
+      verifiedRuntime: true,
+    );
+    const payload = {
+      'title': '阅读十页',
+      'note': '由 V1 模板声明',
+      'targetCount': 10,
+      'importance': 3,
+      'difficulty': 2,
+    };
+    final consent = await broker.issueUserConsent(
+      session: session,
+      capability: 'host.tasks.create',
+      payload: payload,
+    );
+    proofProvider.allowExistingProof = false;
+
+    await expectLater(
+      broker.invoke(
+        session: session,
+        capability: 'host.tasks.create',
+        payload: payload,
+        consent: consent,
+      ),
+      throwsA(isA<ModCapabilityDeniedException>()),
+    );
+    expect(proofProvider.issueCount, 1);
+    expect(proofProvider.verifyCount, 1);
+    expect(await repository.getAllTasks(), isEmpty);
+  });
+
 }

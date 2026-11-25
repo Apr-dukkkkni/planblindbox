@@ -107,8 +107,9 @@ class WellbeingRepository {
       final date = data['business_date'];
       if (date is! String ||
           date.compareTo(first) < 0 ||
-          date.compareTo(next) >= 0)
+          date.compareTo(next) >= 0) {
         continue;
+      }
       result[date] = WellbeingEntry.fromPrivate(data);
     }
 

@@ -172,15 +172,17 @@ class _ModMarketplacePageState extends State<ModMarketplacePage> {
       );
       if (approved != true) return;
       await _registry.install(raw, grantedPermissions: granted);
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Mod 安装成功，可返回管理器查看模板')));
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('安装失败：$e')));
+      }
     } finally {
       if (mounted) setState(() => _downloading = null);
     }

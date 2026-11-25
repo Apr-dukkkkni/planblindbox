@@ -32,9 +32,14 @@ public class ModCatalogController {
     @GetMapping(value="/{id:.+}/versions/{version}/manifest",produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> manifest(@PathVariable String id,@PathVariable String version) {
         String manifest = service.manifest(id, version);
-        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON)
-                .header("X-Mod-Manifest-SHA256", ManifestIntegrity.sha256(manifest))
-                .body(manifest);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON)
+                .header("X-Mod-Manifest-SHA256", ManifestIntegrity.sha256(manifest));
+        Map<String, String> publisherSignature = service.publisherSignature(id, version);
+        if (!publisherSignature.isEmpty()) {
+            response.header("X-Publisher-Key-Id", publisherSignature.get("keyId"));
+            response.header("X-Publisher-Signature", publisherSignature.get("signature"));
+        }
+        return response.body(manifest);
     }
     public record DownloadRequest(String requestId) {}
     @PostMapping("/{id:.+}/versions/{version}/download")

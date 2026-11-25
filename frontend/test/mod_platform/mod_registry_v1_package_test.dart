@@ -112,7 +112,7 @@ void main() {
     );
   });
 
-  test('V1 package cannot be enabled through registry', () async {
+  test('V1 package must receive explicit user grant before it can be enabled', () async {
     final installedPackage = result();
     await registry.installV1Package(
       package: installedPackage.package,
@@ -121,11 +121,21 @@ void main() {
       packageDirectory: installedPackage.installDirectoryPath,
       archiveSha256: installedPackage.archiveSha256,
     );
+
     await expectLater(
       registry.setEnabled('com.example.v1reading', true),
       throwsA(isA<StateError>()),
     );
     expect((await registry.list()).single['enabled'], isFalse);
+
+    await registry.grantPermission(
+      'com.example.v1reading',
+      'host.tasks.create',
+    );
+    final installed = (await registry.list()).single;
+    expect(installed['grantedPermissions'], ['host.tasks.create']);
+    expect(installed['enabled'], isTrue);
+    expect((installed['permissions'] as List).single, isA<Map>());
   });
 
   test('V1 package upgrades require a higher SemVer and remain disabled', () async {
